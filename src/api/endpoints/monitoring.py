@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends
 
-from api.dependencies import get_target_store, verify_api_key
+from src.api.dependencies import get_target_store, verify_api_key
 
 router = APIRouter()
 

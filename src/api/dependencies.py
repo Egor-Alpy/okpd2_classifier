@@ -1,8 +1,8 @@
 from fastapi import Depends, HTTPException, Header
 from typing import Optional
 
-from core.config import settings
-from storage.target_mongo import TargetMongoStore
+from src.core.config import settings
+from src.storage.target_mongo import TargetMongoStore
 
 async def verify_api_key(x_api_key: Optional[str] = Header(None)):
     """Проверка API ключа"""

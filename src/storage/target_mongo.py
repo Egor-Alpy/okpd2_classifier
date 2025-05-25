@@ -3,8 +3,8 @@ from typing import List, Dict, Any, Optional
 from datetime import datetime
 from bson import ObjectId
 import logging
-from core.config import settings
-from models.domain import ProductStatus
+from src.core.config import settings
+from src.models.domain import ProductStatus
 
 logger = logging.getLogger(__name__)
 

@@ -1,10 +1,10 @@
 from fastapi import APIRouter, Depends, HTTPException
 from typing import Optional
 
-from api.dependencies import get_target_store, verify_api_key
-from services.product_migrator import ProductMigrator
-from storage.source_mongo import SourceMongoStore
-from core.config import settings
+from src.api.dependencies import get_target_store, verify_api_key
+from src.services.product_migrator import ProductMigrator
+from src.storage.source_mongo import SourceMongoStore
+from src.core.config import settings
 
 router = APIRouter()
 

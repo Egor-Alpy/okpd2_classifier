@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from api.endpoints import classification, monitoring
+from src.api.endpoints import classification, monitoring
 
 router = APIRouter()
 

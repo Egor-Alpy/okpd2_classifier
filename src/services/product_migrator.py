@@ -3,9 +3,9 @@ import logging
 from typing import Optional
 import asyncio
 
-from storage.source_mongo import SourceMongoStore
-from storage.target_mongo import TargetMongoStore
-from core.config import settings
+from src.storage.source_mongo import SourceMongoStore
+from src.storage.target_mongo import TargetMongoStore
+from src.core.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -126,4 +126,3 @@ class ProductMigrator:
 
         # Продолжаем с последнего обработанного ID
         await self._run_migration(job_id, job["total_products"])
-        

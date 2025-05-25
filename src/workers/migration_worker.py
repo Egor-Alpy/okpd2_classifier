@@ -2,10 +2,10 @@ import asyncio
 import logging
 from typing import Optional
 
-from storage.source_mongo import SourceMongoStore
-from storage.target_mongo import TargetMongoStore
-from services.product_migrator import ProductMigrator
-from core.config import settings
+from src.storage.source_mongo import SourceMongoStore
+from src.storage.target_mongo import TargetMongoStore
+from src.services.product_migrator import ProductMigrator
+from src.core.config import settings
 
 logger = logging.getLogger(__name__)
 

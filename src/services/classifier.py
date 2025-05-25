@@ -4,9 +4,9 @@ from typing import List, Dict, Any
 from datetime import datetime
 import asyncio
 
-from services.ai_client import AnthropicClient, PromptBuilder
-from storage.target_mongo import TargetMongoStore
-from models.domain import ProductStatus
+from src.services.ai_client import AnthropicClient, PromptBuilder
+from src.storage.target_mongo import TargetMongoStore
+from src.models.domain import ProductStatus
 
 logger = logging.getLogger(__name__)
 

@@ -1,10 +1,10 @@
 import asyncio
 import logging
 
-from services.ai_client import AnthropicClient
-from storage.target_mongo import TargetMongoStore
-from services.classifier import StageOneClassifier
-from core.config import settings
+from src.services.ai_client import AnthropicClient
+from src.storage.target_mongo import TargetMongoStore
+from src.services.classifier import StageOneClassifier
+from src.core.config import settings
 
 logger = logging.getLogger(__name__)
 
