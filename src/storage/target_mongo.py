@@ -4,6 +4,8 @@ from datetime import datetime
 from bson import ObjectId
 import logging
 from pymongo import UpdateOne  # ВАЖНО: правильный импорт!
+from pymongo.errors import BulkWriteError
+
 from src.core.config import settings
 from src.models.domain import ProductStatus
 
@@ -67,7 +69,7 @@ class TargetMongoStore:
 
     async def insert_products_batch(self, products: List[Dict[str, Any]], collection_name: str) -> int:
         """
-        Вставить батч товаров в целевую БД
+        Вставить батч товаров в целевую БД с улучшенной обработкой дубликатов
 
         Returns:
             Количество вставленных товаров
@@ -86,7 +88,8 @@ class TargetMongoStore:
                 "status_stg1": ProductStatus.PENDING.value,
                 "created_at": datetime.utcnow(),
                 "error_message": None,
-                "batch_id": None
+                "batch_id": None,
+                "worker_id": None  # Добавлено для консистентности
             }
             documents.append(doc)
 
@@ -96,15 +99,19 @@ class TargetMongoStore:
             inserted_count = len(result.inserted_ids)
             logger.info(f"Inserted {inserted_count} products to target DB")
             return inserted_count
+        except BulkWriteError as e:
+            # Более точная обработка BulkWriteError
+            write_errors = e.details.get('writeErrors', [])
+            duplicate_count = sum(1 for error in write_errors if error['code'] == 11000)
+            inserted_count = e.details.get('nInserted', 0)
+
+            logger.warning(
+                f"Batch insert completed with {inserted_count} inserted, "
+                f"{duplicate_count} duplicates skipped"
+            )
+            return inserted_count
         except Exception as e:
-            # При дубликатах pymongo выбросит BulkWriteError
-            if "duplicate key error" in str(e).lower():
-                logger.warning(f"Some products already exist, continuing...")
-                # Считаем сколько реально вставилось
-                # BulkWriteError содержит информацию о успешных операциях
-                if hasattr(e, 'details') and 'nInserted' in e.details:
-                    return e.details['nInserted']
-                return 0
+            logger.error(f"Unexpected error during batch insert: {e}")
             raise
 
     async def get_pending_products(self, limit: int = 50) -> List[Dict[str, Any]]:
