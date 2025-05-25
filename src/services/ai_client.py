@@ -12,29 +12,34 @@ class AnthropicClient:
     def __init__(self, api_key: str, model: str):
         # Настраиваем HTTP клиент с прокси если указан
         self.proxy_url = settings.proxy_url
-
-        if self.proxy_url:
-            logger.info(f"Using proxy for Anthropic API: {self.proxy_url}")
-            # Создаем httpx клиент с прокси
-            http_client = httpx.AsyncClient(
-                proxies={
-                    "http://": self.proxy_url,
-                    "https://": self.proxy_url
-                },
-                timeout=httpx.Timeout(30.0, connect=10.0)
-            )
-            self.client = AsyncAnthropic(
-                api_key=api_key,
-                http_client=http_client
-            )
-        else:
-            logger.info("No proxy configured for Anthropic API")
-            self.client = AsyncAnthropic(api_key=api_key)
-
+        self.api_key = api_key
         self.model = model
+        self.client = None
+        self._http_client = None
+
+    async def _ensure_client(self):
+        """Создать клиент при необходимости"""
+        if self.client is None:
+            if self.proxy_url:
+                logger.info(f"Using proxy for Anthropic API: {self.proxy_url}")
+                # Создаем httpx клиент с прокси
+                # В httpx используется параметр 'proxy', а не 'proxies'
+                self._http_client = httpx.AsyncClient(
+                    proxy=self.proxy_url,
+                    timeout=httpx.Timeout(30.0, connect=10.0)
+                )
+                self.client = AsyncAnthropic(
+                    api_key=self.api_key,
+                    http_client=self._http_client
+                )
+            else:
+                logger.info("No proxy configured for Anthropic API")
+                self.client = AsyncAnthropic(api_key=self.api_key)
 
     async def classify_batch(self, prompt: str, max_tokens: int = 4000) -> str:
         """Отправить запрос на классификацию"""
+        await self._ensure_client()
+
         try:
             logger.debug(f"Sending request to Anthropic API via {'proxy' if self.proxy_url else 'direct connection'}")
 
@@ -60,11 +65,15 @@ class AnthropicClient:
             raise
 
     async def __aenter__(self):
+        await self._ensure_client()
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         """Закрыть клиент при выходе из контекста"""
-        await self.client.close()
+        if self.client:
+            await self.client.close()
+        if self._http_client:
+            await self._http_client.aclose()
 
 
 class PromptBuilder:
