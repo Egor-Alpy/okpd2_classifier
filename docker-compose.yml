@@ -34,6 +34,11 @@ services:
       # Переопределяем для Docker network
       - TARGET_MONGO_HOST=mongodb
       - REDIS_URL=redis://redis:6379
+      # Прокси настройки (если указаны в .env)
+      - HTTP_PROXY=${HTTP_PROXY}
+      - HTTPS_PROXY=${HTTPS_PROXY}
+      - SOCKS_PROXY=${SOCKS_PROXY}
+      - NO_PROXY=localhost,127.0.0.1,mongodb,redis
     depends_on:
       mongodb:
         condition: service_healthy
@@ -49,6 +54,11 @@ services:
       # Переопределяем для Docker network
       - TARGET_MONGO_HOST=mongodb
       - REDIS_URL=redis://redis:6379
+      # Прокси настройки (если указаны в .env)
+      - HTTP_PROXY=${HTTP_PROXY}
+      - HTTPS_PROXY=${HTTPS_PROXY}
+      - SOCKS_PROXY=${SOCKS_PROXY}
+      - NO_PROXY=localhost,127.0.0.1,mongodb,redis
     depends_on:
       mongodb:
         condition: service_healthy
@@ -70,6 +80,11 @@ services:
       - CLASSIFICATION_BATCH_SIZE=10
       - RATE_LIMIT_DELAY=10
       - MAX_RETRIES=3
+      # Прокси настройки (если указаны в .env)
+      - HTTP_PROXY=${HTTP_PROXY}
+      - HTTPS_PROXY=${HTTPS_PROXY}
+      - SOCKS_PROXY=${SOCKS_PROXY}
+      - NO_PROXY=localhost,127.0.0.1,mongodb,redis
     depends_on:
       mongodb:
         condition: service_healthy

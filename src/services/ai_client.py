@@ -1,19 +1,43 @@
 from anthropic import AsyncAnthropic
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 import logging
 import re
+import httpx
+from src.core.config import settings
 
 logger = logging.getLogger(__name__)
 
 
 class AnthropicClient:
     def __init__(self, api_key: str, model: str):
-        self.client = AsyncAnthropic(api_key=api_key)
+        # Настраиваем HTTP клиент с прокси если указан
+        self.proxy_url = settings.proxy_url
+
+        if self.proxy_url:
+            logger.info(f"Using proxy for Anthropic API: {self.proxy_url}")
+            # Создаем httpx клиент с прокси
+            http_client = httpx.AsyncClient(
+                proxies={
+                    "http://": self.proxy_url,
+                    "https://": self.proxy_url
+                },
+                timeout=httpx.Timeout(30.0, connect=10.0)
+            )
+            self.client = AsyncAnthropic(
+                api_key=api_key,
+                http_client=http_client
+            )
+        else:
+            logger.info("No proxy configured for Anthropic API")
+            self.client = AsyncAnthropic(api_key=api_key)
+
         self.model = model
 
     async def classify_batch(self, prompt: str, max_tokens: int = 4000) -> str:
         """Отправить запрос на классификацию"""
         try:
+            logger.debug(f"Sending request to Anthropic API via {'proxy' if self.proxy_url else 'direct connection'}")
+
             response = await self.client.messages.create(
                 model=self.model,
                 max_tokens=max_tokens,
@@ -23,9 +47,24 @@ class AnthropicClient:
 
             return response.content[0].text
 
+        except httpx.ProxyError as e:
+            logger.error(f"Proxy error when calling Anthropic API: {e}")
+            logger.error(f"Please check your proxy settings: {self.proxy_url}")
+            raise
+        except httpx.ConnectError as e:
+            logger.error(f"Connection error when calling Anthropic API: {e}")
+            logger.error("If you need a proxy/VPN, please configure HTTP_PROXY, HTTPS_PROXY or SOCKS_PROXY in .env")
+            raise
         except Exception as e:
             logger.error(f"Error calling Anthropic API: {e}")
             raise
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        """Закрыть клиент при выходе из контекста"""
+        await self.client.close()
 
 
 class PromptBuilder:
@@ -193,4 +232,3 @@ class PromptBuilder:
                     results[product_id] = groups
 
         return results
-    

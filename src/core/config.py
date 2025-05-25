@@ -17,7 +17,7 @@ class Settings(BaseSettings):
 
     # Target MongoDB (наша новая база)
     target_mongo_host: str = "localhost"
-    target_mongo_port: int = 27017  # Исправлено с 27018 на 27017
+    target_mongo_port: int = 27017
     target_mongo_user: Optional[str] = None
     target_mongo_pass: Optional[str] = None
     target_mongo_authsource: Optional[str] = None
@@ -31,6 +31,11 @@ class Settings(BaseSettings):
     # Anthropic
     anthropic_api_key: str
     anthropic_model: str = "claude-3-haiku-20240307"  # Используем более быструю модель
+
+    # Proxy settings for Anthropic API
+    http_proxy: Optional[str] = None
+    https_proxy: Optional[str] = None
+    socks_proxy: Optional[str] = None
 
     # Processing
     migration_batch_size: int = 1000
@@ -83,6 +88,18 @@ class Settings(BaseSettings):
             connection_string = f"mongodb://{self.target_mongo_host}:{self.target_mongo_port}"
 
         return connection_string
+
+    @property
+    def proxy_url(self) -> Optional[str]:
+        """Получить URL прокси для Anthropic API"""
+        # Приоритет: SOCKS -> HTTPS -> HTTP
+        if self.socks_proxy:
+            return self.socks_proxy
+        elif self.https_proxy:
+            return self.https_proxy
+        elif self.http_proxy:
+            return self.http_proxy
+        return None
 
     class Config:
         env_file = ".env"

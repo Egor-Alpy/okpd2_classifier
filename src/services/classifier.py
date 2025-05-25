@@ -3,6 +3,7 @@ import logging
 from typing import List, Dict, Any
 from datetime import datetime
 import asyncio
+import os
 
 from src.services.ai_client import AnthropicClient, PromptBuilder
 from src.storage.target_mongo import TargetMongoStore
@@ -27,6 +28,14 @@ class StageOneClassifier:
         self.worker_id = worker_id or f"worker_{uuid.uuid4().hex[:8]}"
         self.prompt_builder = PromptBuilder()
 
+        # Rate limit settings
+        self.rate_limit_delay = int(os.getenv("RATE_LIMIT_DELAY", "10"))
+        self.max_retries = int(os.getenv("MAX_RETRIES", "3"))
+
+        logger.info(f"Classifier initialized with batch_size={batch_size}, "
+                    f"rate_limit_delay={self.rate_limit_delay}s, "
+                    f"max_retries={self.max_retries}")
+
     async def process_batch(self, products: List[Dict[str, Any]]) -> Dict[str, Any]:
         """
         Обработать батч товаров
@@ -50,51 +59,75 @@ class StageOneClassifier:
         # Товары уже помечены как processing при получении через get_pending_products_atomic
         product_ids = [str(p["_id"]) for p in products]
 
-        try:
-            # Готовим данные для промпта
-            product_map = {}
-            product_names = []
+        retry_count = 0
+        while retry_count < self.max_retries:
+            try:
+                # Готовим данные для промпта
+                product_map = {}
+                product_names = []
 
-            for product in products:
-                product_id = str(product["_id"])
-                product_name = product["title"]
-                product_map[product_name] = product_id
-                product_names.append(product_name)
+                for product in products:
+                    product_id = str(product["_id"])
+                    product_name = product["title"]
+                    product_map[product_name] = product_id
+                    product_names.append(product_name)
 
-            # Формируем промпт
-            prompt = self.prompt_builder.build_stage_one_prompt(product_names)
+                # Формируем промпт
+                prompt = self.prompt_builder.build_stage_one_prompt(product_names)
 
-            # Отправляем запрос к AI
-            response = await self.ai_client.classify_batch(prompt)
+                # Отправляем запрос к AI с retry логикой
+                response = await self.ai_client.classify_batch(prompt)
 
-            # Парсим результаты
-            results = self.prompt_builder.parse_classification_response(response, product_map)
+                # Парсим результаты
+                results = self.prompt_builder.parse_classification_response(response, product_map)
 
-            # Обновляем товары в БД
-            await self._update_products_with_results(products, results, batch_id)
+                # Обновляем товары в БД
+                await self._update_products_with_results(products, results, batch_id)
 
-            # Статистика
-            classified_count = len(results)
-            none_classified_count = len(products) - classified_count
+                # Статистика
+                classified_count = len(results)
+                none_classified_count = len(products) - classified_count
 
-            logger.info(
-                f"Batch {batch_id} completed: "
-                f"{classified_count} classified, {none_classified_count} not classified"
-            )
+                logger.info(
+                    f"Batch {batch_id} completed: "
+                    f"{classified_count} classified, {none_classified_count} not classified"
+                )
 
-            return {
-                "batch_id": batch_id,
-                "total": len(products),
-                "classified": classified_count,
-                "none_classified": none_classified_count,
-                "results": results
-            }
+                return {
+                    "batch_id": batch_id,
+                    "total": len(products),
+                    "classified": classified_count,
+                    "none_classified": none_classified_count,
+                    "results": results
+                }
 
-        except Exception as e:
-            logger.error(f"Error processing batch {batch_id}: {e}")
-            # Помечаем все товары как failed
-            await self._mark_products_failed(product_ids, str(e))
-            raise
+            except Exception as e:
+                error_str = str(e)
+
+                # Проверяем, является ли это rate limit ошибкой
+                if "429" in error_str or "rate_limit_error" in error_str:
+                    retry_count += 1
+
+                    if retry_count < self.max_retries:
+                        # Экспоненциальная задержка: 30s, 60s, 120s
+                        wait_time = 30 * (2 ** (retry_count - 1))
+
+                        logger.warning(
+                            f"Rate limit hit for batch {batch_id}. "
+                            f"Retry {retry_count}/{self.max_retries} after {wait_time}s delay. "
+                            f"Error: {error_str}"
+                        )
+
+                        await asyncio.sleep(wait_time)
+                        continue
+                    else:
+                        logger.error(f"Max retries reached for batch {batch_id}. Marking as failed.")
+
+                # Если это не rate limit или превышены попытки
+                logger.error(f"Error processing batch {batch_id}: {e}")
+                # Помечаем все товары как failed
+                await self._mark_products_failed(product_ids, str(e))
+                raise
 
     async def _update_products_with_results(
             self,
@@ -167,8 +200,9 @@ class StageOneClassifier:
                 # Обрабатываем батч
                 await self.process_batch(products)
 
-                # Небольшая пауза между батчами
-                await asyncio.sleep(1)
+                # ВАЖНО: Задержка между батчами для избежания rate limit
+                logger.info(f"Worker {self.worker_id}: Waiting {self.rate_limit_delay}s before next batch...")
+                await asyncio.sleep(self.rate_limit_delay)
 
             except Exception as e:
                 logger.error(f"Error in continuous classification for worker {self.worker_id}: {e}")
