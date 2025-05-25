@@ -23,7 +23,6 @@ class TargetMongoStore:
         """Инициализация хранилища"""
         await self._setup_indexes()
 
-
     async def _setup_indexes(self):
         """Создать необходимые индексы"""
         # Индексы для products_stage_one
@@ -76,13 +75,32 @@ class TargetMongoStore:
                 return len([d for d in documents if d not in e.details.get('writeErrors', [])])
             raise
 
-    async def get_pending_products(self, limit: int = 50) -> List[Dict[str, Any]]:
-        """Получить товары для классификации"""
-        cursor = self.products.find(
-            {"status_stg1": ProductStatus.PENDING.value}
-        ).limit(limit)
+    async def get_pending_products_atomic(self, limit: int = 50, worker_id: str = None) -> List[Dict[str, Any]]:
+        """Атомарно получить и заблокировать товары для классификации"""
+        # Используем findAndModify для атомарного обновления
+        products = []
 
-        return await cursor.to_list(length=limit)
+        for _ in range(limit):
+            doc = await self.products.find_one_and_update(
+                {
+                    "status_stg1": ProductStatus.PENDING.value
+                },
+                {
+                    "$set": {
+                        "status_stg1": ProductStatus.PROCESSING.value,
+                        "processing_started_at": datetime.utcnow(),
+                        "worker_id": worker_id
+                    }
+                },
+                return_document=True
+            )
+
+            if doc:
+                products.append(doc)
+            else:
+                break  # Нет больше pending товаров
+
+        return products
 
     async def update_product_status(
             self,

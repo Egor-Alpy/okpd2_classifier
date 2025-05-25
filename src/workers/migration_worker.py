@@ -35,6 +35,8 @@ class MigrationWorker:
             settings.target_mongodb_database
         )
 
+        await self.target_store.initialize()
+
         self.migrator = ProductMigrator(
             self.source_store,
             self.target_store,

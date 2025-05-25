@@ -28,6 +28,8 @@ class ClassificationWorker:
             settings.target_mongodb_database
         )
 
+        await self.target_store.initialize()
+
         ai_client = AnthropicClient(
             settings.anthropic_api_key,
             settings.anthropic_model
@@ -73,4 +75,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-    
