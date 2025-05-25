@@ -171,7 +171,6 @@ curl http://localhost:8000/api/v1/classification/migration/{job_id} \
   okpd_group: ["17", "32"],  // Массив групп ОКПД2
   status_stg1: "classified",   // pending, processing, classified, none_classified, failed
   created_at: ISODate(),
-  updated_at: ISODate(),
   batch_id: "batch_12345",
   worker_id: "worker_1"
 }
