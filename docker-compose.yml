@@ -5,64 +5,34 @@ services:
     build: .
     ports:
       - "8000:8000"
-    environment:
-      - SOURCE_MONGODB_URL=mongodb://source-mongo:27017
-      - TARGET_MONGODB_URL=mongodb://target-mongo:27017
-      - REDIS_URL=redis://redis:6379
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
-      - API_KEY=${API_KEY}
+    env_file:
+      - .env
     depends_on:
-      - target-mongo
       - redis
     command: uvicorn src.main:app --host 0.0.0.0 --port 8000
 
   migration-worker:
     build: .
-    environment:
-      - SOURCE_MONGODB_URL=mongodb://source-mongo:27017
-      - TARGET_MONGODB_URL=mongodb://target-mongo:27017
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
-    depends_on:
-      - target-mongo
+    env_file:
+      - .env
     command: python -m src.workers.migration_worker
 
   classification-worker:
     build: .
+    env_file:
+      - .env
     environment:
-      - TARGET_MONGODB_URL=mongodb://target-mongo:27017
-      - REDIS_URL=redis://redis:6379
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - WORKER_ID=worker_${WORKER_NUMBER:-1}
     depends_on:
-      - target-mongo
       - redis
-    command: python -m src.workers.classification_worker
+    command: python -m src.workers.classification_worker --worker-id worker_${WORKER_NUMBER:-1}
     deploy:
       replicas: 3
-
-  # Эмуляция исходной MongoDB (в продакшене будет внешняя)
-  source-mongo:
-    image: mongo:6
-    ports:
-      - "27017:27017"
-    volumes:
-      - source_mongo_data:/data/db
-
-  # Наша целевая MongoDB
-  target-mongo:
-    image: mongo:6
-    ports:
-      - "27018:27017"
-    volumes:
-      - target_mongo_data:/data/db
 
   redis:
     image: redis:7-alpine
     ports:
       - "6379:6379"
 
-
-
 volumes:
-  source_mongo_data:
-  target_mongo_data:
-
+  redis_data:

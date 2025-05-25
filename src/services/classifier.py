@@ -18,11 +18,13 @@ class StageOneClassifier:
             self,
             ai_client: AnthropicClient,
             target_store: TargetMongoStore,
-            batch_size: int = 50
+            batch_size: int = 50,
+            worker_id: str = None
     ):
         self.ai_client = ai_client
         self.target_store = target_store
         self.batch_size = batch_size
+        self.worker_id = worker_id or f"worker_{uuid.uuid4().hex[:8]}"
         self.prompt_builder = PromptBuilder()
 
     async def process_batch(self, products: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -45,9 +47,8 @@ class StageOneClassifier:
         batch_id = f"batch_{uuid.uuid4().hex[:8]}"
         logger.info(f"Processing batch {batch_id} with {len(products)} products")
 
-        # Сначала помечаем товары как processing
+        # Товары уже помечены как processing при получении через get_pending_products_atomic
         product_ids = [str(p["_id"]) for p in products]
-        await self._mark_products_processing(product_ids, batch_id)
 
         try:
             # Готовим данные для промпта
@@ -95,21 +96,6 @@ class StageOneClassifier:
             await self._mark_products_failed(product_ids, str(e))
             raise
 
-    async def _mark_products_processing(self, product_ids: List[str], batch_id: str):
-        """Пометить товары как обрабатываемые"""
-        updates = []
-        for product_id in product_ids:
-            updates.append({
-                "_id": product_id,
-                "data": {
-                    "status_stg1": ProductStatus.PROCESSING.value,
-                    "batch_id": batch_id,
-                    "updated_at": datetime.utcnow()
-                }
-            })
-
-        await self.target_store.bulk_update_products(updates)
-
     async def _update_products_with_results(
             self,
             products: List[Dict[str, Any]],
@@ -130,7 +116,8 @@ class StageOneClassifier:
                         "status_stg1": ProductStatus.CLASSIFIED.value,
                         "okpd_group": results[product_id],
                         "updated_at": datetime.utcnow(),
-                        "batch_id": batch_id
+                        "batch_id": batch_id,
+                        "worker_id": self.worker_id
                     }
                 })
             else:
@@ -140,7 +127,8 @@ class StageOneClassifier:
                     "data": {
                         "status_stg1": ProductStatus.NONE_CLASSIFIED.value,
                         "updated_at": datetime.utcnow(),
-                        "batch_id": batch_id
+                        "batch_id": batch_id,
+                        "worker_id": self.worker_id
                     }
                 })
 
@@ -155,7 +143,8 @@ class StageOneClassifier:
                 "data": {
                     "status_stg1": ProductStatus.FAILED.value,
                     "error_message": error_message,
-                    "updated_at": datetime.utcnow()
+                    "updated_at": datetime.utcnow(),
+                    "worker_id": self.worker_id
                 }
             })
 
@@ -163,15 +152,18 @@ class StageOneClassifier:
 
     async def run_continuous_classification(self):
         """Запустить непрерывную классификацию"""
-        logger.info("Starting continuous classification...")
+        logger.info(f"Starting continuous classification for worker {self.worker_id}...")
 
         while True:
             try:
-                # Получаем pending товары
-                products = await self.target_store.get_pending_products(self.batch_size)
+                # Получаем pending товары атомарно
+                products = await self.target_store.get_pending_products_atomic(
+                    self.batch_size,
+                    self.worker_id
+                )
 
                 if not products:
-                    logger.info("No pending products, waiting...")
+                    logger.info(f"Worker {self.worker_id}: No pending products, waiting...")
                     await asyncio.sleep(10)
                     continue
 
@@ -182,5 +174,5 @@ class StageOneClassifier:
                 await asyncio.sleep(1)
 
             except Exception as e:
-                logger.error(f"Error in continuous classification: {e}")
+                logger.error(f"Error in continuous classification for worker {self.worker_id}: {e}")
                 await asyncio.sleep(30)

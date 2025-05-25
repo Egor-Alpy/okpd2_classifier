@@ -15,7 +15,4 @@ async def verify_api_key(x_api_key: Optional[str] = Header(None)):
 
 async def get_target_store() -> TargetMongoStore:
     """Получить экземпляр TargetMongoStore"""
-    return TargetMongoStore(
-        settings.target_mongodb_url,
-        settings.target_mongodb_database
-    )
+    return TargetMongoStore(settings.target_mongodb_database)

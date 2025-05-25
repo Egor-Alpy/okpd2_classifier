@@ -2,6 +2,7 @@ from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 from typing import List, Dict, Any, Optional
 from bson import ObjectId
 import logging
+from core.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -9,8 +10,14 @@ logger = logging.getLogger(__name__)
 class SourceMongoStore:
     """Работа с исходной MongoDB (только чтение)"""
 
-    def __init__(self, connection_url: str, database_name: str, collection_name: str):
-        self.client = AsyncIOMotorClient(connection_url)
+    def __init__(self, database_name: str, collection_name: str):
+        # Используем настройки из конфига
+        self.client = AsyncIOMotorClient(
+            settings.source_mongodb_connection_string,
+            directConnection=settings.source_mongo_direct_connection,
+            serverSelectionTimeoutMS=5000,
+            connectTimeoutMS=5000
+        )
         self.db: AsyncIOMotorDatabase = self.client[database_name]
         self.collection_name = collection_name
         self.collection = self.db[collection_name]
@@ -58,6 +65,17 @@ class SourceMongoStore:
     async def count_total_products(self) -> int:
         """Подсчитать общее количество товаров"""
         return await self.collection.count_documents({})
+
+    async def test_connection(self) -> bool:
+        """Проверить подключение к БД"""
+        try:
+            # Пробуем выполнить простую команду
+            await self.client.admin.command('ping')
+            logger.info("Successfully connected to source MongoDB")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to connect to source MongoDB: {e}")
+            return False
 
     async def close(self):
         """Закрыть соединение"""

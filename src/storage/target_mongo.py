@@ -3,7 +3,7 @@ from typing import List, Dict, Any, Optional
 from datetime import datetime
 from bson import ObjectId
 import logging
-
+from core.config import settings
 from models.domain import ProductStatus
 
 logger = logging.getLogger(__name__)
@@ -12,8 +12,14 @@ logger = logging.getLogger(__name__)
 class TargetMongoStore:
     """Работа с целевой MongoDB (наша новая БД)"""
 
-    def __init__(self, connection_url: str, database_name: str):
-        self.client = AsyncIOMotorClient(connection_url)
+    def __init__(self, database_name: str):
+        # Используем настройки из конфига
+        self.client = AsyncIOMotorClient(
+            settings.target_mongodb_connection_string,
+            directConnection=settings.target_mongo_direct_connection,
+            serverSelectionTimeoutMS=5000,
+            connectTimeoutMS=5000
+        )
         self.db: AsyncIOMotorDatabase = self.client[database_name]
         self.products = self.db.products_stage_one
         self.migration_jobs = self.db.migration_jobs
@@ -21,19 +27,42 @@ class TargetMongoStore:
 
     async def initialize(self):
         """Инициализация хранилища"""
+        # Проверяем подключение
+        connected = await self.test_connection()
+        if not connected:
+            raise Exception("Failed to connect to target MongoDB")
+
+        # Создаем индексы
         await self._setup_indexes()
+
+    async def test_connection(self) -> bool:
+        """Проверить подключение к БД"""
+        try:
+            # Пробуем выполнить простую команду
+            await self.client.admin.command('ping')
+            logger.info("Successfully connected to target MongoDB")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to connect to target MongoDB: {e}")
+            return False
 
     async def _setup_indexes(self):
         """Создать необходимые индексы"""
-        # Индексы для products_stage_one
-        await self.products.create_index([("old_mongo_id", 1), ("collection_name", 1)], unique=True)
-        await self.products.create_index("status_stg1")
-        await self.products.create_index("created_at")
-        await self.products.create_index("okpd_group")
+        try:
+            # Индексы для products_stage_one
+            await self.products.create_index([("old_mongo_id", 1), ("collection_name", 1)], unique=True)
+            await self.products.create_index("status_stg1")
+            await self.products.create_index("created_at")
+            await self.products.create_index("okpd_group")
+            await self.products.create_index([("status_stg1", 1), ("created_at", 1)])  # Для выборки pending
 
-        # Индексы для других коллекций
-        await self.migration_jobs.create_index("job_id", unique=True)
-        await self.batches.create_index("batch_id", unique=True)
+            # Индексы для других коллекций
+            await self.migration_jobs.create_index("job_id", unique=True)
+            await self.batches.create_index("batch_id", unique=True)
+
+            logger.info("MongoDB indexes created successfully")
+        except Exception as e:
+            logger.warning(f"Error creating indexes (may already exist): {e}")
 
     async def insert_products_batch(self, products: List[Dict[str, Any]], collection_name: str) -> int:
         """
@@ -71,15 +100,26 @@ class TargetMongoStore:
             # При дубликатах pymongo выбросит BulkWriteError
             if "duplicate key error" in str(e).lower():
                 logger.warning(f"Some products already exist, continuing...")
-                # Подсчитываем сколько реально вставилось
-                return len([d for d in documents if d not in e.details.get('writeErrors', [])])
+                # Считаем сколько реально вставилось
+                # BulkWriteError содержит информацию о успешных операциях
+                if hasattr(e, 'details') and 'nInserted' in e.details:
+                    return e.details['nInserted']
+                return 0
             raise
+
+    async def get_pending_products(self, limit: int = 50) -> List[Dict[str, Any]]:
+        """Получить товары для классификации"""
+        cursor = self.products.find(
+            {"status_stg1": ProductStatus.PENDING.value}
+        ).limit(limit)
+
+        return await cursor.to_list(length=limit)
 
     async def get_pending_products_atomic(self, limit: int = 50, worker_id: str = None) -> List[Dict[str, Any]]:
         """Атомарно получить и заблокировать товары для классификации"""
-        # Используем findAndModify для атомарного обновления
         products = []
 
+        # Используем find_one_and_update для атомарного обновления
         for _ in range(limit):
             doc = await self.products.find_one_and_update(
                 {
@@ -99,6 +139,9 @@ class TargetMongoStore:
                 products.append(doc)
             else:
                 break  # Нет больше pending товаров
+
+        if products:
+            logger.info(f"Worker {worker_id} locked {len(products)} products for processing")
 
         return products
 

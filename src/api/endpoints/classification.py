@@ -16,7 +16,6 @@ async def start_migration(
 ):
     """Начать миграцию товаров из исходной БД"""
     source_store = SourceMongoStore(
-        settings.source_mongodb_url,
         settings.source_mongodb_database,
         settings.source_collection_name
     )
@@ -75,7 +74,6 @@ async def resume_migration(
         return {"message": "Migration already completed"}
 
     source_store = SourceMongoStore(
-        settings.source_mongodb_url,
         settings.source_mongodb_database,
         settings.source_collection_name
     )

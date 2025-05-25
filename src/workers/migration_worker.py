@@ -25,16 +25,13 @@ class MigrationWorker:
 
         # Инициализируем хранилища
         self.source_store = SourceMongoStore(
-            settings.source_mongodb_url,
             settings.source_mongodb_database,
             settings.source_collection_name
         )
 
-        self.target_store = TargetMongoStore(
-            settings.target_mongodb_url,
-            settings.target_mongodb_database
-        )
+        self.target_store = TargetMongoStore(settings.target_mongodb_database)
 
+        # Инициализируем target store (создание индексов)
         await self.target_store.initialize()
 
         self.migrator = ProductMigrator(
@@ -93,4 +90,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-    

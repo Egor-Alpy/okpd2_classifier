@@ -23,11 +23,9 @@ class ClassificationWorker:
         logger.info(f"Starting classification worker {self.worker_id}...")
 
         # Инициализируем компоненты
-        self.target_store = TargetMongoStore(
-            settings.target_mongodb_url,
-            settings.target_mongodb_database
-        )
+        self.target_store = TargetMongoStore(settings.target_mongodb_database)
 
+        # Инициализируем target store (создание индексов)
         await self.target_store.initialize()
 
         ai_client = AnthropicClient(
@@ -38,7 +36,8 @@ class ClassificationWorker:
         self.classifier = StageOneClassifier(
             ai_client,
             self.target_store,
-            settings.classification_batch_size
+            settings.classification_batch_size,
+            worker_id=self.worker_id  # Передаем worker_id
         )
 
         self.running = True
