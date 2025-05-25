@@ -4,8 +4,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from redis.asyncio import Redis
 
-from api.router import router as api_router
-from core.config import settings
+from src.api.router import router as api_router
+from src.core.config import settings
 
 # Настройка логирования
 logging.basicConfig(
