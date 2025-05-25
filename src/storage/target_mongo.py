@@ -3,7 +3,7 @@ from typing import List, Dict, Any, Optional
 from datetime import datetime
 from bson import ObjectId
 import logging
-from pymongo import UpdateOne  # Правильный импорт
+from pymongo import UpdateOne  # ВАЖНО: правильный импорт!
 from src.core.config import settings
 from src.models.domain import ProductStatus
 
@@ -179,20 +179,22 @@ class TargetMongoStore:
 
         bulk_operations = []
         for update in updates:
-            # Используем класс UpdateOne вместо словаря
-            bulk_operations.append(
-                UpdateOne(
-                    {"_id": ObjectId(update["_id"])},
-                    {"$set": update["data"]}
-                )
+            # ВАЖНО: Используем класс UpdateOne из pymongo, НЕ словарь!
+            operation = UpdateOne(
+                {"_id": ObjectId(update["_id"])},
+                {"$set": update["data"]}
             )
+            bulk_operations.append(operation)
 
         if bulk_operations:
             try:
+                # Отправляем список операций UpdateOne
                 result = await self.products.bulk_write(bulk_operations)
                 logger.info(f"Bulk update: {result.modified_count} products updated")
             except Exception as e:
                 logger.error(f"Bulk update error: {e}")
+                logger.error(f"First operation type: {type(bulk_operations[0]) if bulk_operations else 'None'}")
+
                 # Fallback на индивидуальные обновления
                 for update in updates:
                     try:

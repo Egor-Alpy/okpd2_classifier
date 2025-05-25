@@ -17,7 +17,7 @@ class Settings(BaseSettings):
 
     # Target MongoDB (наша новая база)
     target_mongo_host: str = "localhost"
-    target_mongo_port: int = 27018
+    target_mongo_port: int = 27017  # Исправлено с 27018 на 27017
     target_mongo_user: Optional[str] = None
     target_mongo_pass: Optional[str] = None
     target_mongo_authsource: Optional[str] = None
@@ -30,12 +30,16 @@ class Settings(BaseSettings):
 
     # Anthropic
     anthropic_api_key: str
-    anthropic_model: str = "claude-3-7-sonnet-20250219"
+    anthropic_model: str = "claude-3-haiku-20240307"  # Используем более быструю модель
 
     # Processing
     migration_batch_size: int = 1000
-    classification_batch_size: int = 50
-    max_workers: int = 5
+    classification_batch_size: int = 10  # Уменьшено для избежания rate limit
+    max_workers: int = 1  # Уменьшено количество воркеров
+
+    # Rate limit settings
+    rate_limit_delay: int = 10  # Задержка между батчами в секундах
+    max_retries: int = 3  # Количество попыток при rate limit
 
     # API
     api_key: str

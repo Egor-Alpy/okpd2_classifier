@@ -56,7 +56,8 @@ services:
         condition: service_started
     command: python -m src.workers.migration_worker
 
-  classification-worker-1:
+  # Только один classification worker для избежания rate limit!
+  classification-worker:
     build: .
     env_file:
       - .env
@@ -65,44 +66,16 @@ services:
       # Переопределяем для Docker network
       - TARGET_MONGO_HOST=mongodb
       - REDIS_URL=redis://redis:6379
+      # Важные настройки для rate limit
+      - CLASSIFICATION_BATCH_SIZE=10
+      - RATE_LIMIT_DELAY=10
+      - MAX_RETRIES=3
     depends_on:
       mongodb:
         condition: service_healthy
       redis:
         condition: service_started
     command: python -m src.workers.classification_worker --worker-id worker_1
-
-  classification-worker-2:
-    build: .
-    env_file:
-      - .env
-    environment:
-      - WORKER_ID=worker_2
-      # Переопределяем для Docker network
-      - TARGET_MONGO_HOST=mongodb
-      - REDIS_URL=redis://redis:6379
-    depends_on:
-      mongodb:
-        condition: service_healthy
-      redis:
-        condition: service_started
-    command: python -m src.workers.classification_worker --worker-id worker_2
-
-  classification-worker-3:
-    build: .
-    env_file:
-      - .env
-    environment:
-      - WORKER_ID=worker_3
-      # Переопределяем для Docker network
-      - TARGET_MONGO_HOST=mongodb
-      - REDIS_URL=redis://redis:6379
-    depends_on:
-      mongodb:
-        condition: service_healthy
-      redis:
-        condition: service_started
-    command: python -m src.workers.classification_worker --worker-id worker_3
 
 volumes:
   mongo_data:
