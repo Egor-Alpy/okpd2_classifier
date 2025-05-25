@@ -1,8 +1,8 @@
+from fastapi import APIRouter, Depends
 from datetime import datetime, timedelta
 
-from fastapi import APIRouter, Depends
-
 from src.api.dependencies import get_target_store, verify_api_key
+from src.core.metrics import metrics_collector
 
 router = APIRouter()
 
@@ -39,7 +39,47 @@ async def health_check():
     }
 
 
-# Добавить в src/api/endpoints/monitoring.py
+@router.get("/metrics/classification")
+async def get_classification_metrics(
+        time_window: int = 60,
+        api_key: str = Depends(verify_api_key)
+):
+    """Получить метрики классификации"""
+    return await metrics_collector.get_classification_stats(time_window)
+
+
+@router.get("/metrics/migration")
+async def get_migration_metrics(
+        time_window: int = 60,
+        api_key: str = Depends(verify_api_key)
+):
+    """Получить метрики миграции"""
+    return await metrics_collector.get_migration_stats(time_window)
+
+
+@router.get("/metrics/summary")
+async def get_metrics_summary(
+        api_key: str = Depends(verify_api_key)
+):
+    """Получить сводку всех метрик"""
+    classification_1h = await metrics_collector.get_classification_stats(60)
+    classification_24h = await metrics_collector.get_classification_stats(1440)
+    migration_1h = await metrics_collector.get_migration_stats(60)
+
+    return {
+        "classification": {
+            "last_hour": classification_1h,
+            "last_24_hours": classification_24h
+        },
+        "migration": {
+            "last_hour": migration_1h
+        },
+        "system": {
+            "active_workers": len(metrics_collector.worker_stats),
+            "total_rate_limits": classification_1h['rate_limits_total']
+        }
+    }
+
 
 @router.get("/workers/health")
 async def get_workers_health(

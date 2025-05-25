@@ -4,16 +4,18 @@ from typing import List, Dict, Any
 from datetime import datetime
 import asyncio
 import os
+import time
 
 from src.services.ai_client import AnthropicClient, PromptBuilder
 from src.storage.target_mongo import TargetMongoStore
 from src.models.domain import ProductStatus
+from src.core.metrics import metrics_collector, ClassificationMetrics
 
 logger = logging.getLogger(__name__)
 
 
 class StageOneClassifier:
-    """Классификатор первого этапа с динамическим размером батча"""
+    """Классификатор первого этапа"""
 
     def __init__(
             self,
@@ -24,8 +26,7 @@ class StageOneClassifier:
     ):
         self.ai_client = ai_client
         self.target_store = target_store
-        self.initial_batch_size = batch_size
-        self.current_batch_size = batch_size
+        self.batch_size = batch_size
         self.worker_id = worker_id or f"worker_{uuid.uuid4().hex[:8]}"
         self.prompt_builder = PromptBuilder()
 
@@ -33,88 +34,13 @@ class StageOneClassifier:
         self.rate_limit_delay = int(os.getenv("RATE_LIMIT_DELAY", "10"))
         self.max_retries = int(os.getenv("MAX_RETRIES", "3"))
 
-        # Динамические настройки
-        self.consecutive_successes = 0
-        self.consecutive_failures = 0
-        self.min_batch_size = 5
-        self.max_batch_size = 50
-
-        logger.info(
-            f"Classifier initialized with batch_size={batch_size}, "
-            f"rate_limit_delay={self.rate_limit_delay}s, "
-            f"max_retries={self.max_retries}"
-        )
-
-    def adjust_batch_size(self, success: bool):
-        """Динамически корректировать размер батча"""
-        if success:
-            self.consecutive_successes += 1
-            self.consecutive_failures = 0
-
-            # Увеличиваем размер батча после 3 успешных запросов
-            if self.consecutive_successes >= 3:
-                self.current_batch_size = min(
-                    int(self.current_batch_size * 1.5),
-                    self.max_batch_size
-                )
-                self.consecutive_successes = 0
-                logger.info(f"Increased batch size to {self.current_batch_size}")
-        else:
-            self.consecutive_failures += 1
-            self.consecutive_successes = 0
-
-            # Уменьшаем размер батча после неудачи
-            self.current_batch_size = max(
-                int(self.current_batch_size * 0.7),
-                self.min_batch_size
-            )
-            logger.info(f"Decreased batch size to {self.current_batch_size}")
-
-    async def run_continuous_classification(self):
-        """Запустить непрерывную классификацию с динамическим размером батча"""
-        logger.info(f"Starting continuous classification for worker {self.worker_id}...")
-
-        while True:
-            try:
-                # Получаем pending товары с текущим размером батча
-                products = await self.target_store.get_pending_products_atomic(
-                    self.current_batch_size,
-                    self.worker_id
-                )
-
-                if not products:
-                    logger.info(f"Worker {self.worker_id}: No pending products, waiting...")
-                    await asyncio.sleep(10)
-                    continue
-
-                # Обрабатываем батч
-                try:
-                    await self.process_batch(products)
-                    self.adjust_batch_size(success=True)
-                except Exception as e:
-                    if "429" in str(e) or "rate_limit" in str(e):
-                        self.adjust_batch_size(success=False)
-                    raise
-
-                # Динамическая задержка в зависимости от размера батча
-                dynamic_delay = max(
-                    self.rate_limit_delay,
-                    int(self.rate_limit_delay * (self.current_batch_size / self.initial_batch_size))
-                )
-
-                logger.info(
-                    f"Worker {self.worker_id}: Waiting {dynamic_delay}s before next batch "
-                    f"(current batch size: {self.current_batch_size})..."
-                )
-                await asyncio.sleep(dynamic_delay)
-
-            except Exception as e:
-                logger.error(f"Error in continuous classification for worker {self.worker_id}: {e}")
-                await asyncio.sleep(30)
+        logger.info(f"Classifier initialized with batch_size={batch_size}, "
+                    f"rate_limit_delay={self.rate_limit_delay}s, "
+                    f"max_retries={self.max_retries}")
 
     async def process_batch(self, products: List[Dict[str, Any]]) -> Dict[str, Any]:
         """
-        Обработать батч товаров
+        Обработать батч товаров с записью метрик
 
         Returns:
             Результаты обработки
@@ -131,6 +57,9 @@ class StageOneClassifier:
 
         batch_id = f"batch_{uuid.uuid4().hex[:8]}"
         logger.info(f"Processing batch {batch_id} with {len(products)} products")
+
+        # Засекаем время
+        start_time = time.time()
 
         # Товары уже помечены как processing при получении через get_pending_products_atomic
         product_ids = [str(p["_id"]) for p in products]
@@ -169,6 +98,18 @@ class StageOneClassifier:
                     f"{classified_count} classified, {none_classified_count} not classified"
                 )
 
+                # Записываем метрику успешной обработки
+                processing_time = time.time() - start_time
+                metric = ClassificationMetrics(
+                    timestamp=datetime.utcnow(),
+                    worker_id=self.worker_id,
+                    batch_size=len(products),
+                    processing_time=processing_time,
+                    success_count=classified_count,
+                    failure_count=none_classified_count
+                )
+                await metrics_collector.record_classification(metric)
+
                 return {
                     "batch_id": batch_id,
                     "total": len(products),
@@ -182,6 +123,9 @@ class StageOneClassifier:
 
                 # Проверяем, является ли это rate limit ошибкой
                 if "429" in error_str or "rate_limit_error" in error_str:
+                    # Записываем метрику о rate limit
+                    await metrics_collector.record_rate_limit(self.worker_id)
+
                     retry_count += 1
 
                     if retry_count < self.max_retries:
@@ -201,6 +145,19 @@ class StageOneClassifier:
 
                 # Если это не rate limit или превышены попытки
                 logger.error(f"Error processing batch {batch_id}: {e}")
+
+                # Записываем метрику об ошибке
+                processing_time = time.time() - start_time
+                metric = ClassificationMetrics(
+                    timestamp=datetime.utcnow(),
+                    worker_id=self.worker_id,
+                    batch_size=len(products),
+                    processing_time=processing_time,
+                    success_count=0,
+                    failure_count=len(products)
+                )
+                await metrics_collector.record_classification(metric)
+
                 # Помечаем все товары как failed
                 await self._mark_products_failed(product_ids, str(e))
                 raise
@@ -225,7 +182,8 @@ class StageOneClassifier:
                         "status_stg1": ProductStatus.CLASSIFIED.value,
                         "okpd_group": results[product_id],
                         "batch_id": batch_id,
-                        "worker_id": self.worker_id
+                        "worker_id": self.worker_id,
+                        "updated_at": datetime.utcnow()
                     }
                 })
             else:
@@ -235,7 +193,8 @@ class StageOneClassifier:
                     "data": {
                         "status_stg1": ProductStatus.NONE_CLASSIFIED.value,
                         "batch_id": batch_id,
-                        "worker_id": self.worker_id
+                        "worker_id": self.worker_id,
+                        "updated_at": datetime.utcnow()
                     }
                 })
 
@@ -250,8 +209,37 @@ class StageOneClassifier:
                 "data": {
                     "status_stg1": ProductStatus.FAILED.value,
                     "error_message": error_message,
-                    "worker_id": self.worker_id
+                    "worker_id": self.worker_id,
+                    "updated_at": datetime.utcnow()
                 }
             })
 
         await self.target_store.bulk_update_products(updates)
+
+    async def run_continuous_classification(self):
+        """Запустить непрерывную классификацию"""
+        logger.info(f"Starting continuous classification for worker {self.worker_id}...")
+
+        while True:
+            try:
+                # Получаем pending товары атомарно
+                products = await self.target_store.get_pending_products_atomic(
+                    self.batch_size,
+                    self.worker_id
+                )
+
+                if not products:
+                    logger.info(f"Worker {self.worker_id}: No pending products, waiting...")
+                    await asyncio.sleep(10)
+                    continue
+
+                # Обрабатываем батч
+                await self.process_batch(products)
+
+                # ВАЖНО: Задержка между батчами для избежания rate limit
+                logger.info(f"Worker {self.worker_id}: Waiting {self.rate_limit_delay}s before next batch...")
+                await asyncio.sleep(self.rate_limit_delay)
+
+            except Exception as e:
+                logger.error(f"Error in continuous classification for worker {self.worker_id}: {e}")
+                await asyncio.sleep(30)

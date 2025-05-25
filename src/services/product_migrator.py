@@ -2,10 +2,13 @@ import uuid
 import logging
 from typing import Optional
 import asyncio
+import time
+from datetime import datetime
 
 from src.storage.source_mongo import SourceMongoStore
 from src.storage.target_mongo import TargetMongoStore
 from src.core.config import settings
+from src.core.metrics import metrics_collector, MigrationMetrics
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +57,9 @@ class ProductMigrator:
 
         try:
             while migrated_count < total_products:
+                # Засекаем время батча
+                batch_start_time = time.time()
+
                 # Получаем батч из исходной БД
                 products = await self.source_store.get_products_batch(
                     limit=self.batch_size,
@@ -70,6 +76,19 @@ class ProductMigrator:
                     self.source_store.collection_name
                 )
 
+                # Записываем метрику миграции
+                batch_processing_time = time.time() - batch_start_time
+                duplicates = len(products) - inserted
+
+                metric = MigrationMetrics(
+                    timestamp=datetime.utcnow(),
+                    batch_size=len(products),
+                    processing_time=batch_processing_time,
+                    inserted_count=inserted,
+                    duplicate_count=duplicates
+                )
+                await metrics_collector.record_migration(metric)
+
                 migrated_count += inserted
 
                 # Запоминаем последний ID
@@ -85,7 +104,8 @@ class ProductMigrator:
 
                 logger.info(
                     f"Migration progress: {migrated_count}/{total_products} "
-                    f"({migrated_count / total_products * 100:.1f}%)"
+                    f"({migrated_count / total_products * 100:.1f}%) "
+                    f"- Batch time: {batch_processing_time:.2f}s"
                 )
 
                 # Небольшая пауза между батчами

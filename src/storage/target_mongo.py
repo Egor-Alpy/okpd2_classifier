@@ -3,9 +3,8 @@ from typing import List, Dict, Any, Optional
 from datetime import datetime
 from bson import ObjectId
 import logging
-from pymongo import UpdateOne  # ВАЖНО: правильный импорт!
+from pymongo import UpdateOne
 from pymongo.errors import BulkWriteError
-
 from src.core.config import settings
 from src.models.domain import ProductStatus
 
@@ -57,7 +56,9 @@ class TargetMongoStore:
             await self.products.create_index("status_stg1")
             await self.products.create_index("created_at")
             await self.products.create_index("okpd_group")
-            await self.products.create_index([("status_stg1", 1), ("created_at", 1)])  # Для выборки pending
+            await self.products.create_index([("status_stg1", 1), ("created_at", 1)])
+            await self.products.create_index("updated_at")  # Новый индекс для метрик
+            await self.products.create_index("worker_id")  # Новый индекс для воркеров
 
             # Индексы для других коллекций
             await self.migration_jobs.create_index("job_id", unique=True)
@@ -87,9 +88,10 @@ class TargetMongoStore:
                 "okpd_group": None,
                 "status_stg1": ProductStatus.PENDING.value,
                 "created_at": datetime.utcnow(),
+                "updated_at": datetime.utcnow(),
                 "error_message": None,
                 "batch_id": None,
-                "worker_id": None  # Добавлено для консистентности
+                "worker_id": None
             }
             documents.append(doc)
 
@@ -162,7 +164,8 @@ class TargetMongoStore:
     ):
         """Обновить статус товара после классификации"""
         update_data = {
-            "status_stg1": status.value
+            "status_stg1": status.value,
+            "updated_at": datetime.utcnow()
         }
 
         if okpd_groups is not None:
@@ -186,7 +189,7 @@ class TargetMongoStore:
 
         bulk_operations = []
         for update in updates:
-            # ВАЖНО: Используем класс UpdateOne из pymongo, НЕ словарь!
+            # Используем класс UpdateOne из pymongo
             operation = UpdateOne(
                 {"_id": ObjectId(update["_id"])},
                 {"$set": update["data"]}
@@ -238,7 +241,8 @@ class TargetMongoStore:
             "total_products": total_products,
             "migrated_products": 0,
             "last_processed_id": None,
-            "created_at": datetime.utcnow()
+            "created_at": datetime.utcnow(),
+            "updated_at": datetime.utcnow()
         }
 
         await self.migration_jobs.insert_one(job)
@@ -253,7 +257,8 @@ class TargetMongoStore:
     ):
         """Обновить прогресс миграции"""
         update_data = {
-            "migrated_products": migrated_products
+            "migrated_products": migrated_products,
+            "updated_at": datetime.utcnow()
         }
 
         if last_processed_id:
