@@ -20,7 +20,6 @@ class ProductStageOne(BaseModel):
     okpd_group: Optional[List[str]] = Field(None, description="Основные категории ОКПД2 (2 цифры)")
     status_stg1: ProductStatus = Field(ProductStatus.PENDING, description="Статус классификации")
     created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: Optional[datetime] = None
     error_message: Optional[str] = None
     batch_id: Optional[str] = None
 
@@ -45,5 +44,3 @@ class MigrationJob(BaseModel):
     migrated_products: int = 0
     last_processed_id: Optional[str] = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: Optional[datetime] = None
-    

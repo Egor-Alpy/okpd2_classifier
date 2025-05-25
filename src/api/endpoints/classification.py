@@ -53,8 +53,7 @@ async def get_migration_status(
         "total_products": job["total_products"],
         "migrated_products": job["migrated_products"],
         "progress_percentage": round(progress_percentage, 2),
-        "created_at": job["created_at"],
-        "updated_at": job.get("updated_at")
+        "created_at": job["created_at"]
     }
 
 

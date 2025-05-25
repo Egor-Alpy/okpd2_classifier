@@ -115,7 +115,6 @@ class StageOneClassifier:
                     "data": {
                         "status_stg1": ProductStatus.CLASSIFIED.value,
                         "okpd_group": results[product_id],
-                        "updated_at": datetime.utcnow(),
                         "batch_id": batch_id,
                         "worker_id": self.worker_id
                     }
@@ -126,7 +125,6 @@ class StageOneClassifier:
                     "_id": product_id,
                     "data": {
                         "status_stg1": ProductStatus.NONE_CLASSIFIED.value,
-                        "updated_at": datetime.utcnow(),
                         "batch_id": batch_id,
                         "worker_id": self.worker_id
                     }
@@ -143,7 +141,6 @@ class StageOneClassifier:
                 "data": {
                     "status_stg1": ProductStatus.FAILED.value,
                     "error_message": error_message,
-                    "updated_at": datetime.utcnow(),
                     "worker_id": self.worker_id
                 }
             })

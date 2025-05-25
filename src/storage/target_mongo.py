@@ -84,7 +84,6 @@ class TargetMongoStore:
                 "okpd_group": None,
                 "status_stg1": ProductStatus.PENDING.value,
                 "created_at": datetime.utcnow(),
-                "updated_at": None,
                 "error_message": None,
                 "batch_id": None
             }
@@ -155,8 +154,7 @@ class TargetMongoStore:
     ):
         """Обновить статус товара после классификации"""
         update_data = {
-            "status_stg1": status.value,
-            "updated_at": datetime.utcnow()
+            "status_stg1": status.value
         }
 
         if okpd_groups is not None:
@@ -217,8 +215,7 @@ class TargetMongoStore:
             "total_products": total_products,
             "migrated_products": 0,
             "last_processed_id": None,
-            "created_at": datetime.utcnow(),
-            "updated_at": None
+            "created_at": datetime.utcnow()
         }
 
         await self.migration_jobs.insert_one(job)
@@ -233,8 +230,7 @@ class TargetMongoStore:
     ):
         """Обновить прогресс миграции"""
         update_data = {
-            "migrated_products": migrated_products,
-            "updated_at": datetime.utcnow()
+            "migrated_products": migrated_products
         }
 
         if last_processed_id:

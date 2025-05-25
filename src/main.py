@@ -2,9 +2,10 @@ import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from redis.asyncio import Redis
 
 from api.router import router as api_router
-from core.database import connect_to_redis, close_redis_connection
+from core.config import settings
 
 # Настройка логирования
 logging.basicConfig(
@@ -13,19 +14,35 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Глобальная переменная для Redis
+redis_client = None
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Управление жизненным циклом приложения"""
+    global redis_client
+
     # Startup
     logger.info("Starting application...")
-    await connect_to_redis()
+
+    # Подключаемся к Redis если нужен для API
+    try:
+        redis_client = await Redis.from_url(settings.redis_url)
+        await redis_client.ping()
+        logger.info("Connected to Redis")
+    except Exception as e:
+        logger.warning(f"Failed to connect to Redis: {e}")
+        redis_client = None
 
     yield
 
     # Shutdown
     logger.info("Shutting down application...")
-    await close_redis_connection()
+
+    if redis_client:
+        await redis_client.close()
+        logger.info("Disconnected from Redis")
 
 
 # Создание приложения
