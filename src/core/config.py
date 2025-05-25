@@ -30,7 +30,7 @@ class Settings(BaseSettings):
 
     # Anthropic
     anthropic_api_key: str
-    anthropic_model: str = "claude-3-sonnet-20241022"
+    anthropic_model: str = "claude-3-7-sonnet-20250219"
 
     # Processing
     migration_batch_size: int = 1000

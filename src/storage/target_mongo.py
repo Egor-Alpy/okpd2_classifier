@@ -3,6 +3,7 @@ from typing import List, Dict, Any, Optional
 from datetime import datetime
 from bson import ObjectId
 import logging
+from pymongo import UpdateOne  # Правильный импорт
 from src.core.config import settings
 from src.models.domain import ProductStatus
 
@@ -178,16 +179,29 @@ class TargetMongoStore:
 
         bulk_operations = []
         for update in updates:
+            # Используем класс UpdateOne вместо словаря
             bulk_operations.append(
-                {
-                    "updateOne": {
-                        "filter": {"_id": ObjectId(update["_id"])},
-                        "update": {"$set": update["data"]}
-                    }
-                }
+                UpdateOne(
+                    {"_id": ObjectId(update["_id"])},
+                    {"$set": update["data"]}
+                )
             )
 
-        await self.products.bulk_write(bulk_operations)
+        if bulk_operations:
+            try:
+                result = await self.products.bulk_write(bulk_operations)
+                logger.info(f"Bulk update: {result.modified_count} products updated")
+            except Exception as e:
+                logger.error(f"Bulk update error: {e}")
+                # Fallback на индивидуальные обновления
+                for update in updates:
+                    try:
+                        await self.products.update_one(
+                            {"_id": ObjectId(update["_id"])},
+                            {"$set": update["data"]}
+                        )
+                    except Exception as ind_e:
+                        logger.error(f"Individual update error for {update['_id']}: {ind_e}")
 
     async def get_statistics(self) -> Dict[str, int]:
         """Получить статистику по товарам"""

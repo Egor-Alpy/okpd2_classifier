@@ -1,38 +1,109 @@
 version: '3.8'
 
 services:
+  # Target MongoDB для хранения результатов классификации
+  mongodb:
+    image: mongo:7
+    ports:
+      - "27017:27017"
+    environment:
+      - MONGO_INITDB_DATABASE=okpd_classifier
+    volumes:
+      - mongo_data:/data/db
+    healthcheck:
+      test: echo 'db.runCommand("ping").ok' | mongosh localhost:27017/test --quiet
+      interval: 10s
+      timeout: 10s
+      retries: 5
+      start_period: 40s
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+
   api:
     build: .
     ports:
       - "8000:8000"
     env_file:
       - .env
+    environment:
+      # Переопределяем для Docker network
+      - TARGET_MONGO_HOST=mongodb
+      - REDIS_URL=redis://redis:6379
     depends_on:
-      - redis
+      mongodb:
+        condition: service_healthy
+      redis:
+        condition: service_started
     command: uvicorn src.main:app --host 0.0.0.0 --port 8000
 
   migration-worker:
     build: .
     env_file:
       - .env
+    environment:
+      # Переопределяем для Docker network
+      - TARGET_MONGO_HOST=mongodb
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      redis:
+        condition: service_started
     command: python -m src.workers.migration_worker
 
-  classification-worker:
+  classification-worker-1:
     build: .
     env_file:
       - .env
     environment:
-      - WORKER_ID=worker_${WORKER_NUMBER:-1}
+      - WORKER_ID=worker_1
+      # Переопределяем для Docker network
+      - TARGET_MONGO_HOST=mongodb
+      - REDIS_URL=redis://redis:6379
     depends_on:
-      - redis
-    command: python -m src.workers.classification_worker --worker-id worker_${WORKER_NUMBER:-1}
-    deploy:
-      replicas: 3
+      mongodb:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    command: python -m src.workers.classification_worker --worker-id worker_1
 
-  redis:
-    image: redis:7-alpine
-    ports:
-      - "6379:6379"
+  classification-worker-2:
+    build: .
+    env_file:
+      - .env
+    environment:
+      - WORKER_ID=worker_2
+      # Переопределяем для Docker network
+      - TARGET_MONGO_HOST=mongodb
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    command: python -m src.workers.classification_worker --worker-id worker_2
+
+  classification-worker-3:
+    build: .
+    env_file:
+      - .env
+    environment:
+      - WORKER_ID=worker_3
+      # Переопределяем для Docker network
+      - TARGET_MONGO_HOST=mongodb
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    command: python -m src.workers.classification_worker --worker-id worker_3
 
 volumes:
+  mongo_data:
   redis_data:
