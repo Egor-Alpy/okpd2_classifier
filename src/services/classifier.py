@@ -32,6 +32,16 @@ class StageOneClassifier:
         Returns:
             Результаты обработки
         """
+        if not products:
+            logger.warning("Empty products list provided")
+            return {
+                "batch_id": "",
+                "total": 0,
+                "classified": 0,
+                "none_classified": 0,
+                "results": {}
+            }
+
         batch_id = f"batch_{uuid.uuid4().hex[:8]}"
         logger.info(f"Processing batch {batch_id} with {len(products)} products")
 
@@ -174,4 +184,3 @@ class StageOneClassifier:
             except Exception as e:
                 logger.error(f"Error in continuous classification: {e}")
                 await asyncio.sleep(30)
-                

@@ -4,7 +4,7 @@ from datetime import datetime
 from bson import ObjectId
 import logging
 
-from models.domain import ProductStageOne, ProductStatus
+from models.domain import ProductStatus
 
 logger = logging.getLogger(__name__)
 
@@ -19,20 +19,22 @@ class TargetMongoStore:
         self.migration_jobs = self.db.migration_jobs
         self.batches = self.db.classification_batches
 
-        # Создаем индексы при инициализации
-        self._setup_indexes()
+    async def initialize(self):
+        """Инициализация хранилища"""
+        await self._setup_indexes()
 
-    def _setup_indexes(self):
+
+    async def _setup_indexes(self):
         """Создать необходимые индексы"""
         # Индексы для products_stage_one
-        self.products.create_index([("old_mongo_id", 1), ("collection_name", 1)], unique=True)
-        self.products.create_index("status_stg1")
-        self.products.create_index("created_at")
-        self.products.create_index("okpd_group")
+        await self.products.create_index([("old_mongo_id", 1), ("collection_name", 1)], unique=True)
+        await self.products.create_index("status_stg1")
+        await self.products.create_index("created_at")
+        await self.products.create_index("okpd_group")
 
         # Индексы для других коллекций
-        self.migration_jobs.create_index("job_id", unique=True)
-        self.batches.create_index("batch_id", unique=True)
+        await self.migration_jobs.create_index("job_id", unique=True)
+        await self.batches.create_index("batch_id", unique=True)
 
     async def insert_products_batch(self, products: List[Dict[str, Any]], collection_name: str) -> int:
         """
