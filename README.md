@@ -1,160 +1,247 @@
 # OKPD2 Stage One Classifier
 
-Первый этап классификации товаров по ОКПД2.
+Первый этап классификации товаров по ОКПД2 с использованием Claude API.
+
+## 📋 Требования
+
+- Python 3.11+
+- Docker и Docker Compose
+- MongoDB (внешняя для source, локальная или внешняя для target)
+- Redis
+- Anthropic API ключ
 
 ## 🚀 Быстрый старт
 
-### 1. Подготовка окружения
+### 1. Клонирование и настройка
 
 ```bash
 # Клонируйте репозиторий
 git clone <repository-url>
 cd okpd2-stage-one
 
+# Создайте виртуальное окружение
+python -m venv venv
+source venv/bin/activate  # Linux/Mac
+# или
+venv\Scripts\activate  # Windows
+
+# Установите зависимости
+pip install -r requirements.txt
+
 # Создайте .env файл
 cp .env.example .env
-
-# Отредактируйте .env и добавьте ваши ключи:
-# - ANTHROPIC_API_KEY - ключ от Anthropic Claude API
-# - API_KEY - ваш секретный ключ для API
 ```
 
-### 2. Запуск для разработки
+### 2. Настройка .env
+
+Отредактируйте `.env` файл и укажите параметры подключения:
 
 ```bash
-# Запустите только инфраструктуру (MongoDB, Redis)
-docker-compose -f docker-compose.dev.yml up -d
+# Source MongoDB (внешняя база с товарами)
+SOURCE_MONGO_HOST=mongodb.angora-ide.ts.net
+SOURCE_MONGO_PORT=27017
+SOURCE_MONGO_USER=parser
+SOURCE_MONGO_PASS=your_password_here
+SOURCE_MONGO_AUTHSOURCE=parser
+SOURCE_MONGODB_DATABASE=TenderDB
+SOURCE_COLLECTION_NAME=products
 
-# Проверьте подключения и создайте индексы
-python scripts/init_db.py
+# Target MongoDB (локальная или внешняя)
+TARGET_MONGO_HOST=localhost
+TARGET_MONGO_PORT=27017
+TARGET_MONGO_USER=
+TARGET_MONGO_PASS=
+TARGET_MONGODB_DATABASE=okpd_classifier
 
-# Запустите API сервер локально
-python -m uvicorn src.main:app --reload
-
-# В отдельном терминале запустите миграцию
-python scripts/start_migration.py --api-key your-key --monitor
+# API ключи
+ANTHROPIC_API_KEY=your_anthropic_key_here
+API_KEY=your_secure_api_key_here
 ```
 
-### 3. Запуск в production
+### 3. Проверка подключений
+
+```bash
+# Проверьте подключение к MongoDB
+python scripts/test_mongo_connection.py
+
+# Или используя Make
+make test-connection
+```
+
+### 4. Инициализация базы данных
+
+```bash
+# Создайте индексы и проверьте все компоненты
+python scripts/init_db.py
+
+# Или используя Make
+make init-db
+```
+
+### 5. Запуск системы
+
+#### Вариант 1: Локальная разработка
+
+```bash
+# Запустите инфраструктуру (Redis и Target MongoDB если нужна)
+docker-compose -f docker-compose.dev.yml up -d
+
+# Запустите API сервер
+uvicorn src.main:app --reload
+
+# В отдельных терминалах запустите воркеры:
+python -m src.workers.migration_worker
+python -m src.workers.classification_worker --worker-id worker_1
+python -m src.workers.classification_worker --worker-id worker_2
+```
+
+#### Вариант 2: Production через Docker
 
 ```bash
 # Запустите все сервисы
-docker-compose up -d
+docker-compose -f docker-compose.prod.yml up -d
 
 # Проверьте статус
-docker-compose ps
+docker-compose -f docker-compose.prod.yml ps
 
-# Начните миграцию
-python scripts/start_migration.py --api-key your-key --monitor
+# Смотрите логи
+docker-compose -f docker-compose.prod.yml logs -f
 ```
 
-## 📊 Мониторинг
+### 6. Запуск миграции
 
-### Просмотр данных в MongoDB:
-- Source DB: http://localhost:8081 (admin/admin)
-- Target DB: http://localhost:8082 (admin/admin)
-
-### API endpoints:
-- Статистика: `GET http://localhost:8000/api/v1/monitoring/stats`
-- Health check: `GET http://localhost:8000/health`
-- Swagger docs: `http://localhost:8000/docs`
-
-### Проверка логов:
 ```bash
-# Все логи
-docker-compose logs -f
+# Начните миграцию товаров
+python scripts/start_migration.py --api-key your-api-key --monitor
 
-# Только classification workers
-docker-compose logs -f classification-worker
+# Или используя Make
+make migration-start API_KEY=your-api-key
+```
 
-# Только migration worker
-docker-compose logs -f migration-worker
+## 📊 API Endpoints
+
+### Документация
+- Swagger UI: `http://localhost:8000/docs`
+- ReDoc: `http://localhost:8000/redoc`
+
+### Основные endpoints
+
+#### Статистика классификации
+```bash
+curl http://localhost:8000/api/v1/monitoring/stats \
+  -H "X-API-Key: your-api-key"
+```
+
+#### Начать миграцию
+```bash
+curl -X POST http://localhost:8000/api/v1/classification/migration/start \
+  -H "X-API-Key: your-api-key"
+```
+
+#### Статус миграции
+```bash
+curl http://localhost:8000/api/v1/classification/migration/{job_id} \
+  -H "X-API-Key: your-api-key"
 ```
 
 ## 🏗️ Архитектура
 
-### Компоненты:
-- **API Server**: REST API для управления и мониторинга
-- **Migration Worker**: Переносит товары из исходной MongoDB в целевую
-- **Classification Workers**: Классифицируют товары через Claude API (3 экземпляра)
-- **Source MongoDB**: Исходная база данных с товарами (read-only)
-- **Target MongoDB**: Наша база для хранения результатов классификации
-- **Redis**: Очередь задач и кеширование
+### Компоненты системы
 
-### Процесс работы:
-1. Migration Worker читает товары из Source MongoDB батчами
-2. Товары сохраняются в Target MongoDB со статусом "pending"
-3. Classification Workers берут pending товары и отправляют в Claude API
-4. Результаты сохраняются обратно в Target MongoDB
+1. **API Server** - REST API для управления процессом
+2. **Migration Worker** - Переносит товары из source в target MongoDB
+3. **Classification Workers** - Классифицируют товары через Claude API
+4. **Source MongoDB** - Исходная база с товарами (read-only)
+5. **Target MongoDB** - База для хранения результатов классификации
+6. **Redis** - Координация между воркерами
 
-### Структура данных в Target MongoDB:
+### Процесс работы
+
+1. **Миграция**: Migration Worker читает товары батчами из Source MongoDB и сохраняет в Target MongoDB со статусом "pending"
+2. **Классификация**: Classification Workers берут pending товары, отправляют в Claude API и обновляют результаты
+3. **Мониторинг**: API Server предоставляет статистику и управление процессом
+
+### Структура данных
+
 ```javascript
 {
   collection_name: "products",
   old_mongo_id: "6823aecaa470...",
   title: "Название товара",
-  okpd_group: ["17", "32"],  // Может быть несколько групп
+  okpd_group: ["17", "32"],  // Массив групп ОКПД2
   status_stg1: "classified",   // pending, processing, classified, none_classified, failed
   created_at: ISODate(),
   updated_at: ISODate(),
-  error_message: null,
-  batch_id: "batch_12345"
+  batch_id: "batch_12345",
+  worker_id: "worker_1"
 }
 ```
 
-## 🛠️ Разработка
+## 🛠️ Полезные команды
 
-### Запуск тестов:
+### Makefile команды
+
 ```bash
-# Unit тесты
-python -m pytest tests/unit
-
-# Integration тесты
-python -m pytest tests/integration
+make help              # Показать все доступные команды
+make test-connection   # Проверить подключения
+make init-db          # Инициализировать БД
+make dev              # Запустить сервер для разработки
+make prod-up          # Запустить production
+make prod-logs        # Смотреть логи production
+make stats            # Получить статистику
 ```
 
-### Добавление тестовых данных:
-```bash
-# Данные добавляются автоматически при запуске docker-compose.dev.yml
-# Или вручную:
-docker exec -it source-mongo mongo /docker-entrypoint-initdb.d/01_insert_sample_products.js
-```
+### Docker команды
 
-### Очистка данных:
 ```bash
-# Остановить и удалить все контейнеры и volumes
-docker-compose down -v
+# Пересобрать образы
+docker-compose -f docker-compose.prod.yml build
+
+# Перезапустить конкретный сервис
+docker-compose -f docker-compose.prod.yml restart classification-worker-1
+
+# Масштабировать воркеры
+docker-compose -f docker-compose.prod.yml up -d --scale classification-worker=5
 ```
 
 ## 🔍 Troubleshooting
 
-### Ошибка "duplicate key error":
-- Товары уже были мигрированы ранее
-- Решение: Продолжите с того места где остановились или очистите Target DB
+### Проблема: "Failed to connect to MongoDB"
+- Проверьте параметры подключения в .env
+- Убедитесь что MongoDB доступна по указанному адресу
+- Проверьте права пользователя
 
-### Classification workers не берут товары:
-- Проверьте наличие pending товаров в БД
-- Проверьте API ключ Anthropic
-- Посмотрите логи workers
+### Проблема: "Duplicate key error"
+- Товары уже были мигрированы
+- Используйте resume для продолжения миграции
 
-### Миграция зависла:
-- Проверьте статус через API: `/api/v1/classification/migration/{job_id}`
-- Возобновите через: `POST /api/v1/classification/migration/{job_id}/resume`
+### Проблема: Classification workers не работают
+- Проверьте ANTHROPIC_API_KEY
+- Убедитесь что есть pending товары
+- Проверьте логи воркеров
 
-## 📝 Конфигурация
-
-Основные параметры в `.env`:
-- `MIGRATION_BATCH_SIZE` - размер батча для миграции (default: 1000)
-- `CLASSIFICATION_BATCH_SIZE` - размер батча для классификации (default: 50)
-- `MAX_WORKERS` - количество classification workers (default: 3)
+### Проблема: Медленная классификация
+- Увеличьте количество воркеров
+- Увеличьте CLASSIFICATION_BATCH_SIZE
+- Проверьте лимиты Anthropic API
 
 ## 📈 Производительность
 
-При настройках по умолчанию:
-- Миграция: ~1000 товаров/сек
-- Классификация: ~50 товаров за вызов API (~2-3 сек на батч)
-- 3 workers = ~150 товаров/10 сек = ~900 товаров/мин
+- **Миграция**: ~1000 товаров/секунду
+- **Классификация**: ~50 товаров за вызов API
+- **3 воркера**: ~900 товаров/минуту
 
 Для 100,000 товаров:
 - Миграция: ~2 минуты
 - Классификация: ~2 часа
+
+## 🔒 Безопасность
+
+- Используйте сильные пароли для MongoDB
+- Храните API ключи в безопасном месте
+- Ограничьте доступ к API через firewall
+- Регулярно обновляйте зависимости
+
+## 📝 Лицензия
+
+[Укажите вашу лицензию]
