@@ -2,7 +2,7 @@ from motor.motor_asyncio import AsyncIOMotorClient
 from redis.asyncio import Redis
 from typing import Optional
 
-from src.core.config import settings
+from core.config import settings  # Убрать src. из импорта
 
 
 class Database:
@@ -14,7 +14,8 @@ db = Database()
 
 
 async def connect_to_mongo():
-    db.client = AsyncIOMotorClient(settings.mongodb_url)
+    # Здесь нужно использовать target_mongodb_url, а не mongodb_url
+    db.client = AsyncIOMotorClient(settings.target_mongodb_url)
 
 
 async def connect_to_redis():
@@ -32,4 +33,4 @@ async def close_redis_connection():
 
 
 def get_database():
-    return db.client[settings.mongodb_database]
+    return db.client[settings.target_mongodb_database]
