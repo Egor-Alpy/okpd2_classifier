@@ -15,8 +15,11 @@ class TargetMongoStore:
     """Работа с целевой MongoDB (наша новая БД)"""
 
     def __init__(self, database_name: str):
+        connection_string = settings.target_mongodb_connection_string
+        logger.info(f"Connecting to Target MongoDB with: {connection_string}")
+
         self.client = AsyncIOMotorClient(
-            settings.target_mongodb_connection_string,
+            connection_string,
             directConnection=settings.target_mongo_direct_connection,
             serverSelectionTimeoutMS=5000,
             connectTimeoutMS=5000

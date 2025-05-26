@@ -72,8 +72,8 @@ class Settings(BaseSettings):
     @property
     def target_mongodb_connection_string(self) -> str:
         """Формирование строки подключения для Target MongoDB"""
-        connection_string = "mongodb://localhost:27017"
-
+        # Простое подключение без аутентификации
+        connection_string = f"mongodb://{self.target_mongo_host}:{self.target_mongo_port}"
         return connection_string
 
     @property
