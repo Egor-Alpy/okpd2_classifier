@@ -72,20 +72,7 @@ class Settings(BaseSettings):
     @property
     def target_mongodb_connection_string(self) -> str:
         """Формирование строки подключения для Target MongoDB"""
-        if self.target_mongo_user and self.target_mongo_pass:
-            connection_string = (
-                f"mongodb://{self.target_mongo_user}:{quote_plus(self.target_mongo_pass)}@"
-                f"{self.target_mongo_host}:{self.target_mongo_port}"
-            )
-
-            # Добавляем authSource если указан
-            if self.target_mongo_authsource:
-                connection_string += f"/{self.target_mongo_authsource}"
-                connection_string += f"?authMechanism={self.target_mongo_authmechanism}"
-            else:
-                connection_string += f"/?authMechanism={self.target_mongo_authmechanism}"
-        else:
-            connection_string = f"mongodb://{self.target_mongo_host}:{self.target_mongo_port}"
+        connection_string = "mongodb://localhost:27017"
 
         return connection_string
 
