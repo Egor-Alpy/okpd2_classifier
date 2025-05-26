@@ -42,7 +42,8 @@ class TargetMongoStore:
         try:
             # Пробуем выполнить простую команду
             await self.client.admin.command('ping')
-            logger.info("Successfully connected to target MongoDB")
+            logger.info(f"Successfully connected to target MongoDB: {settings.target_mongodb_connection_string}")
+
             return True
         except Exception as e:
             logger.error(f"Failed to connect to target MongoDB: {e}")
@@ -59,6 +60,7 @@ class TargetMongoStore:
             await self.products.create_index([("status_stg1", 1), ("created_at", 1)])
             await self.products.create_index("updated_at")  # Новый индекс для метрик
             await self.products.create_index("worker_id")  # Новый индекс для воркеров
+            await self.products.create_index("processing_started_at")  # Для поиска застрявших
 
             # Индексы для других коллекций
             await self.migration_jobs.create_index("job_id", unique=True)
@@ -91,7 +93,8 @@ class TargetMongoStore:
                 "updated_at": datetime.utcnow(),
                 "error_message": None,
                 "batch_id": None,
-                "worker_id": None
+                "worker_id": None,
+                "processing_started_at": None
             }
             documents.append(doc)
 
@@ -177,6 +180,10 @@ class TargetMongoStore:
         if batch_id:
             update_data["batch_id"] = batch_id
 
+        # ВАЖНО: Обнуляем processing_started_at при завершении обработки
+        if status.value != ProductStatus.PROCESSING.value:
+            update_data["processing_started_at"] = None
+
         await self.products.update_one(
             {"_id": ObjectId(product_id)},
             {"$set": update_data}
@@ -189,31 +196,80 @@ class TargetMongoStore:
 
         bulk_operations = []
         for update in updates:
-            # Используем класс UpdateOne из pymongo
-            operation = UpdateOne(
-                {"_id": ObjectId(update["_id"])},
-                {"$set": update["data"]}
-            )
-            bulk_operations.append(operation)
+            try:
+                # ИСПРАВЛЕНИЕ: Проверяем тип _id и преобразуем при необходимости
+                product_id = update["_id"]
+
+                # Если это уже ObjectId, используем как есть
+                if isinstance(product_id, ObjectId):
+                    filter_query = {"_id": product_id}
+                # Если это строка, преобразуем в ObjectId
+                elif isinstance(product_id, str):
+                    # Проверяем, является ли строка валидным ObjectId
+                    if ObjectId.is_valid(product_id):
+                        filter_query = {"_id": ObjectId(product_id)}
+                    else:
+                        logger.error(f"Invalid ObjectId string: {product_id}")
+                        continue
+                # Если это dict (документ из MongoDB), берем _id
+                elif isinstance(product_id, dict) and "_id" in product_id:
+                    filter_query = {"_id": product_id["_id"]}
+                else:
+                    logger.error(f"Invalid product_id type: {type(product_id)}, value: {product_id}")
+                    continue
+
+                # ВАЖНО: Обнуляем processing_started_at при завершении обработки
+                update_data = update["data"].copy()
+                if update_data.get("status_stg1") != ProductStatus.PROCESSING.value:
+                    update_data["processing_started_at"] = None
+
+                operation = UpdateOne(
+                    filter_query,
+                    {"$set": update_data}
+                )
+                bulk_operations.append(operation)
+
+            except Exception as e:
+                logger.error(f"Error preparing bulk operation for {update.get('_id')}: {e}")
+                continue
 
         if bulk_operations:
             try:
                 # Отправляем список операций UpdateOne
                 result = await self.products.bulk_write(bulk_operations)
-                logger.info(f"Bulk update: {result.modified_count} products updated")
+                logger.info(
+                    f"Bulk update successful: {result.modified_count} products updated out of {len(bulk_operations)}")
+
+                # Проверяем, были ли не обновленные документы
+                if result.modified_count < len(bulk_operations):
+                    logger.warning(f"Not all documents were updated: {result.modified_count}/{len(bulk_operations)}")
+
             except Exception as e:
                 logger.error(f"Bulk update error: {e}")
-                logger.error(f"First operation type: {type(bulk_operations[0]) if bulk_operations else 'None'}")
+                logger.error(f"Number of operations: {len(bulk_operations)}")
 
                 # Fallback на индивидуальные обновления
+                logger.info("Falling back to individual updates...")
+                success_count = 0
                 for update in updates:
                     try:
-                        await self.products.update_one(
-                            {"_id": ObjectId(update["_id"])},
-                            {"$set": update["data"]}
-                        )
+                        product_id = update["_id"]
+                        if isinstance(product_id, str) and ObjectId.is_valid(product_id):
+                            await self.products.update_one(
+                                {"_id": ObjectId(product_id)},
+                                {"$set": update["data"]}
+                            )
+                            success_count += 1
+                        elif isinstance(product_id, ObjectId):
+                            await self.products.update_one(
+                                {"_id": product_id},
+                                {"$set": update["data"]}
+                            )
+                            success_count += 1
                     except Exception as ind_e:
-                        logger.error(f"Individual update error for {update['_id']}: {ind_e}")
+                        logger.error(f"Individual update error for {update.get('_id')}: {ind_e}")
+
+                logger.info(f"Individual updates completed: {success_count}/{len(updates)} successful")
 
     async def get_statistics(self) -> Dict[str, int]:
         """Получить статистику по товарам"""
