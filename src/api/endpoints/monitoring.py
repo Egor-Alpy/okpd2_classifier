@@ -3,6 +3,7 @@ from datetime import datetime, timedelta
 
 from src.api.dependencies import get_target_store, verify_api_key
 from src.core.metrics import metrics_collector
+from src.models.domain import ProductStatus
 
 router = APIRouter()
 
@@ -86,93 +87,47 @@ async def get_workers_health(
         target_store=Depends(get_target_store),
         api_key: str = Depends(verify_api_key)
 ):
-    """Проверить здоровье воркеров"""
-    # Проверяем воркеры по активности в последние 5 минут
-    cutoff_time = datetime.utcnow() - timedelta(minutes=5)
+    """Проверить здоровье воркеров через статистику обработки"""
+    # Получаем статистику обработки за последний час
+    hour_ago = datetime.utcnow() - timedelta(hours=1)
 
-    # Получаем активные воркеры из processing товаров
+    # Группируем по статусам для анализа активности
     pipeline = [
         {
             "$match": {
-                "status_stg1": "processing",
-                "processing_started_at": {"$gte": cutoff_time}
+                "created_at": {"$gte": hour_ago}
             }
         },
         {
             "$group": {
-                "_id": "$worker_id",
-                "last_activity": {"$max": "$processing_started_at"},
-                "active_products": {"$sum": 1}
+                "_id": "$status_stg1",
+                "count": {"$sum": 1}
             }
         }
     ]
 
     cursor = target_store.products.aggregate(pipeline)
-    active_workers = await cursor.to_list(length=None)
-
-    # Получаем статистику по воркерам за последний час
-    hour_ago = datetime.utcnow() - timedelta(hours=1)
-    worker_pipeline = [
-        {
-            "$match": {
-                "status_stg1": {"$in": ["classified", "none_classified"]},
-                "updated_at": {"$gte": hour_ago}
-            }
-        },
-        {
-            "$group": {
-                "_id": "$worker_id",
-                "processed_count": {"$sum": 1},
-                "classified_count": {
-                    "$sum": {"$cond": [{"$eq": ["$status_stg1", "classified"]}, 1, 0]}
-                }
-            }
-        }
-    ]
-
-    cursor = target_store.products.aggregate(worker_pipeline)
-    worker_stats = await cursor.to_list(length=None)
-
-    # Формируем ответ
-    workers = {}
-
-    # Добавляем активные воркеры
-    for worker in active_workers:
-        workers[worker["_id"]] = {
-            "status": "active",
-            "last_activity": worker["last_activity"],
-            "active_products": worker["active_products"],
-            "processed_last_hour": 0,
-            "success_rate": 0
-        }
-
-    # Добавляем статистику
-    for stat in worker_stats:
-        worker_id = stat["_id"]
-        if worker_id not in workers:
-            workers[worker_id] = {
-                "status": "inactive",
-                "last_activity": None,
-                "active_products": 0
-            }
-
-        workers[worker_id]["processed_last_hour"] = stat["processed_count"]
-        workers[worker_id]["success_rate"] = (
-            stat["classified_count"] / stat["processed_count"] * 100
-            if stat["processed_count"] > 0 else 0
-        )
+    status_stats = await cursor.to_list(length=None)
 
     # Проверяем застрявшие товары
     stuck_products = await target_store.products.count_documents({
-        "status_stg1": "processing",
-        "processing_started_at": {"$lt": cutoff_time}
+        "status_stg1": ProductStatus.PROCESSING.value
     })
 
+    # Формируем статистику
+    stats_dict = {stat["_id"]: stat["count"] for stat in status_stats}
+    processed_last_hour = stats_dict.get(ProductStatus.CLASSIFIED.value, 0) + \
+                          stats_dict.get(ProductStatus.NONE_CLASSIFIED.value, 0)
+
     return {
-        "workers": workers,
-        "total_active_workers": len([w for w in workers.values() if w["status"] == "active"]),
+        "processed_last_hour": processed_last_hour,
         "stuck_products": stuck_products,
-        "health_status": "healthy" if stuck_products < 100 else "degraded"
+        "health_status": "healthy" if stuck_products < 100 else "degraded",
+        "metrics": {
+            "classified": stats_dict.get(ProductStatus.CLASSIFIED.value, 0),
+            "none_classified": stats_dict.get(ProductStatus.NONE_CLASSIFIED.value, 0),
+            "failed": stats_dict.get(ProductStatus.FAILED.value, 0)
+        }
     }
 
 
@@ -181,22 +136,10 @@ async def cleanup_stuck_products(
         target_store=Depends(get_target_store),
         api_key: str = Depends(verify_api_key)
 ):
-    """Очистить застрявшие в processing товары"""
-    # Товары в processing более 10 минут считаются застрявшими
-    cutoff_time = datetime.utcnow() - timedelta(minutes=10)
-
+    """Сбросить застрявшие в processing товары обратно в pending"""
     result = await target_store.products.update_many(
-        {
-            "status_stg1": "processing",
-            "processing_started_at": {"$lt": cutoff_time}
-        },
-        {
-            "$set": {
-                "status_stg1": "pending",
-                "processing_started_at": None,
-                "worker_id": None
-            }
-        }
+        {"status_stg1": ProductStatus.PROCESSING.value},
+        {"$set": {"status_stg1": ProductStatus.PENDING.value}}
     )
 
     return {

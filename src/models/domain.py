@@ -6,34 +6,23 @@ from enum import Enum
 
 class ProductStatus(str, Enum):
     PENDING = "pending"
+    PROCESSING = "processing"
     CLASSIFIED = "classified"
     NONE_CLASSIFIED = "none_classified"
     FAILED = "failed"
-    PROCESSING = "processing"
 
 
 class ProductStageOne(BaseModel):
     """Модель товара для первого этапа классификации"""
-    collection_name: str = Field(..., description="Название коллекции источника")
-    old_mongo_id: str = Field(..., description="ID товара в исходной MongoDB")
+    collection_name: str = Field(..., description="Название коллекции БД откуда взяли товар")
+    old_mongo_id: str = Field(..., description="Mongo ID товара который мы взяли")
     title: str = Field(..., description="Наименование товара")
-    okpd_group: Optional[List[str]] = Field(None, description="Основные категории ОКПД2 (2 цифры)")
-    status_stg1: ProductStatus = Field(ProductStatus.PENDING, description="Статус классификации")
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    error_message: Optional[str] = None
-    batch_id: Optional[str] = None
+    okpd_group: Optional[List[str]] = Field(None, description="Основная категория, которая из 2х цифр")
+    status_stg1: ProductStatus = Field(ProductStatus.PENDING, description="Статус классификации первого этапа")
+    created_at: datetime = Field(default_factory=datetime.utcnow, description="Когда начали классификацию")
 
     class Config:
         use_enum_values = True
-
-
-class ClassificationBatch(BaseModel):
-    """Батч для классификации"""
-    batch_id: str
-    products: List[ProductStageOne]
-    status: str = "pending"
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    completed_at: Optional[datetime] = None
 
 
 class MigrationJob(BaseModel):
@@ -44,3 +33,4 @@ class MigrationJob(BaseModel):
     migrated_products: int = 0
     last_processed_id: Optional[str] = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: Optional[datetime] = None

@@ -6,6 +6,7 @@ from src.api.dependencies import get_target_store, verify_api_key
 from src.storage.source_mongo import SourceMongoStore
 from src.services.product_migrator import ProductMigrator
 from src.core.config import settings
+from src.models.domain import ProductStatus
 
 router = APIRouter()
 
@@ -124,7 +125,7 @@ async def get_stats_by_group(
 ):
     """Получить статистику по группам ОКПД2"""
     pipeline = [
-        {"$match": {"status_stg1": "classified"}},
+        {"$match": {"status_stg1": ProductStatus.CLASSIFIED.value}},
         {"$unwind": "$okpd_group"},
         {"$group": {
             "_id": "$okpd_group",
@@ -174,15 +175,8 @@ async def reset_failed_products(
 ):
     """Сбросить статус failed товаров на pending"""
     result = await target_store.products.update_many(
-        {"status_stg1": "failed"},
-        {
-            "$set": {
-                "status_stg1": "pending",
-                "error_message": None,
-                "batch_id": None,
-                "worker_id": None
-            }
-        }
+        {"status_stg1": ProductStatus.FAILED.value},
+        {"$set": {"status_stg1": ProductStatus.PENDING.value}}
     )
 
     return {

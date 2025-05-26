@@ -40,10 +40,7 @@ class StageOneClassifier:
 
     async def process_batch(self, products: List[Dict[str, Any]]) -> Dict[str, Any]:
         """
-        Обработать батч товаров с записью метрик
-
-        Returns:
-            Результаты обработки
+        Обработать батч товаров
         """
         if not products:
             logger.warning("Empty products list provided")
@@ -58,17 +55,8 @@ class StageOneClassifier:
         batch_id = f"batch_{uuid.uuid4().hex[:8]}"
         logger.info(f"Processing batch {batch_id} with {len(products)} products")
 
-        # Засекаем время
         start_time = time.time()
-
-        # ВАЖНО: Извлекаем ID из документов MongoDB правильно
-        product_ids = []
-        for p in products:
-            # MongoDB документ может содержать ObjectId в поле _id
-            if "_id" in p:
-                product_ids.append(p["_id"])  # Сохраняем оригинальный ObjectId
-            else:
-                logger.error(f"Product without _id found: {p}")
+        product_ids = [p["_id"] for p in products]
 
         retry_count = 0
         while retry_count < self.max_retries:
@@ -78,8 +66,7 @@ class StageOneClassifier:
                 product_names = []
 
                 for product in products:
-                    # Используем оригинальный ObjectId для маппинга
-                    product_id = product["_id"]  # Это ObjectId из MongoDB
+                    product_id = product["_id"]
                     product_name = product["title"]
                     product_map[product_name] = product_id
                     product_names.append(product_name)
@@ -87,14 +74,14 @@ class StageOneClassifier:
                 # Формируем промпт
                 prompt = self.prompt_builder.build_stage_one_prompt(product_names)
 
-                # Отправляем запрос к AI с retry логикой
+                # Отправляем запрос к AI
                 response = await self.ai_client.classify_batch(prompt)
 
-                # Парсим результаты (parse_classification_response теперь вернет ObjectId в результатах)
-                results = self._parse_response_with_objectid(response, product_map)
+                # Парсим результаты
+                results = self.prompt_builder.parse_classification_response(response, product_map)
 
                 # Обновляем товары в БД
-                await self._update_products_with_results(products, results, batch_id)
+                await self._update_products_with_results(products, results)
 
                 # Статистика
                 classified_count = len(results)
@@ -105,7 +92,7 @@ class StageOneClassifier:
                     f"{classified_count} classified, {none_classified_count} not classified"
                 )
 
-                # Записываем метрику успешной обработки
+                # Записываем метрику
                 processing_time = time.time() - start_time
                 metric = ClassificationMetrics(
                     timestamp=datetime.utcnow(),
@@ -128,29 +115,20 @@ class StageOneClassifier:
             except Exception as e:
                 error_str = str(e)
 
-                # Проверяем, является ли это rate limit ошибкой
+                # Проверяем rate limit
                 if "429" in error_str or "rate_limit_error" in error_str:
-                    # Записываем метрику о rate limit
                     await metrics_collector.record_rate_limit(self.worker_id)
-
                     retry_count += 1
 
                     if retry_count < self.max_retries:
-                        # Экспоненциальная задержка: 30s, 60s, 120s
                         wait_time = 30 * (2 ** (retry_count - 1))
-
                         logger.warning(
                             f"Rate limit hit for batch {batch_id}. "
-                            f"Retry {retry_count}/{self.max_retries} after {wait_time}s delay. "
-                            f"Error: {error_str}"
+                            f"Retry {retry_count}/{self.max_retries} after {wait_time}s delay."
                         )
-
                         await asyncio.sleep(wait_time)
                         continue
-                    else:
-                        logger.error(f"Max retries reached for batch {batch_id}. Marking as failed.")
 
-                # Если это не rate limit или превышены попытки
                 logger.error(f"Error processing batch {batch_id}: {e}")
 
                 # Записываем метрику об ошибке
@@ -166,110 +144,51 @@ class StageOneClassifier:
                 await metrics_collector.record_classification(metric)
 
                 # Помечаем все товары как failed
-                await self._mark_products_failed(product_ids, str(e))
+                await self._mark_products_failed(product_ids)
                 raise
-
-    def _parse_response_with_objectid(self, response: str, product_map: Dict[str, Any]) -> Dict[Any, List[str]]:
-        """
-        Парсинг ответа от AI с сохранением ObjectId
-
-        Args:
-            response: Ответ от AI
-            product_map: Маппинг {название товара: ObjectId}
-
-        Returns:
-            Dict с результатами {ObjectId: [группы]}
-        """
-        import re
-        results = {}
-
-        for line in response.strip().split('\n'):
-            if '|' not in line:
-                continue
-
-            parts = line.split('|')
-            if len(parts) < 2:
-                continue
-
-            product_name = parts[0].strip()
-
-            # Ищем товар в маппинге
-            product_id = None
-            for name, pid in product_map.items():
-                if product_name.lower() in name.lower() or name.lower() in product_name.lower():
-                    product_id = pid  # Это ObjectId
-                    break
-
-            if product_id:
-                # Извлекаем группы
-                groups = []
-                for group in parts[1:]:
-                    group = group.strip()
-                    # Проверяем, что это двузначное число
-                    if re.match(r'^\d{2}$', group):
-                        groups.append(group)
-
-                if groups:
-                    results[product_id] = groups  # Ключ - это ObjectId
-
-        return results
 
     async def _update_products_with_results(
             self,
             products: List[Dict[str, Any]],
-            results: Dict[Any, List[str]],
-            batch_id: str
+            results: Dict[Any, List[str]]
     ):
         """Обновить товары с результатами классификации"""
         updates = []
 
         for product in products:
-            # Используем оригинальный ObjectId из документа
-            product_id = product["_id"]  # Это ObjectId
+            product_id = product["_id"]
 
             if product_id in results:
                 # Товар классифицирован
                 updates.append({
-                    "_id": product_id,  # Передаем ObjectId как есть
+                    "_id": product_id,
                     "data": {
                         "status_stg1": ProductStatus.CLASSIFIED.value,
-                        "okpd_group": results[product_id],
-                        "batch_id": batch_id,
-                        "worker_id": self.worker_id,
-                        "updated_at": datetime.utcnow()
+                        "okpd_group": results[product_id]
                     }
                 })
                 logger.debug(f"Product {product_id} classified with groups: {results[product_id]}")
             else:
                 # Товар не классифицирован
                 updates.append({
-                    "_id": product_id,  # Передаем ObjectId как есть
+                    "_id": product_id,
                     "data": {
-                        "status_stg1": ProductStatus.NONE_CLASSIFIED.value,
-                        "batch_id": batch_id,
-                        "worker_id": self.worker_id,
-                        "updated_at": datetime.utcnow()
+                        "status_stg1": ProductStatus.NONE_CLASSIFIED.value
                     }
                 })
                 logger.debug(f"Product {product_id} not classified")
 
         if updates:
-            logger.info(f"Sending {len(updates)} updates to bulk_update_products")
             await self.target_store.bulk_update_products(updates)
-        else:
-            logger.warning("No updates to send to database")
 
-    async def _mark_products_failed(self, product_ids: List[Any], error_message: str):
+    async def _mark_products_failed(self, product_ids: List[Any]):
         """Пометить товары как failed"""
         updates = []
         for product_id in product_ids:
             updates.append({
-                "_id": product_id,  # ObjectId передаем как есть
+                "_id": product_id,
                 "data": {
-                    "status_stg1": ProductStatus.FAILED.value,
-                    "error_message": error_message,
-                    "worker_id": self.worker_id,
-                    "updated_at": datetime.utcnow()
+                    "status_stg1": ProductStatus.FAILED.value
                 }
             })
 
@@ -304,7 +223,7 @@ class StageOneClassifier:
                     f"not classified: {result['none_classified']}"
                 )
 
-                # ВАЖНО: Задержка между батчами для избежания rate limit
+                # Задержка между батчами
                 logger.info(f"Worker {self.worker_id}: Waiting {self.rate_limit_delay}s before next batch...")
                 await asyncio.sleep(self.rate_limit_delay)
 

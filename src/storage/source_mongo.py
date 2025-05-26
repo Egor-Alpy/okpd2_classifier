@@ -11,7 +11,6 @@ class SourceMongoStore:
     """Работа с исходной MongoDB (только чтение)"""
 
     def __init__(self, database_name: str, collection_name: str):
-        # Используем настройки из конфига
         self.client = AsyncIOMotorClient(
             settings.source_mongodb_connection_string,
             directConnection=settings.source_mongo_direct_connection,
@@ -30,29 +29,24 @@ class SourceMongoStore:
     ) -> List[Dict[str, Any]]:
         """
         Получить батч товаров из исходной БД
-
-        Args:
-            skip: Сколько товаров пропустить
-            limit: Размер батча
-            last_id: ID последнего обработанного товара (для продолжения)
+        Извлекаем ТОЛЬКО _id и title
         """
         try:
             query = {}
             if last_id:
                 query = {"_id": {"$gt": ObjectId(last_id)}}
 
-            cursor = self.collection.find(query).limit(limit)
+            # Получаем ТОЛЬКО нужные поля
+            cursor = self.collection.find(
+                query,
+                {"_id": 1, "title": 1}  # Проекция - только эти поля
+            ).limit(limit)
 
             products = []
             async for product in cursor:
-                # Извлекаем только нужные поля
                 products.append({
                     "_id": str(product["_id"]),
-                    "title": product.get("title", ""),
-                    "description": product.get("description", ""),
-                    "category": product.get("category", ""),
-                    "brand": product.get("brand", ""),
-                    "article": product.get("article", "")
+                    "title": product.get("title", "")
                 })
 
             logger.info(f"Fetched {len(products)} products from source DB")
@@ -69,7 +63,6 @@ class SourceMongoStore:
     async def test_connection(self) -> bool:
         """Проверить подключение к БД"""
         try:
-            # Пробуем выполнить простую команду
             await self.client.admin.command('ping')
             logger.info("Successfully connected to source MongoDB")
             return True
