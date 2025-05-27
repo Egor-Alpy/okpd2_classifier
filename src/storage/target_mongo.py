@@ -158,11 +158,31 @@ class TargetMongoStore:
                 update_data = {}
                 data = update.get("data", {})
 
+                # Поля первого этапа
                 if "status_stg1" in data:
                     update_data["status_stg1"] = data["status_stg1"]
 
                 if "okpd_group" in data:
                     update_data["okpd_group"] = data["okpd_group"]
+
+                # Поля второго этапа
+                if "status_stg2" in data:
+                    update_data["status_stg2"] = data["status_stg2"]
+
+                if "okpd2_code" in data:
+                    update_data["okpd2_code"] = data["okpd2_code"]
+
+                if "okpd2_name" in data:
+                    update_data["okpd2_name"] = data["okpd2_name"]
+
+                if "stage2_started_at" in data:
+                    update_data["stage2_started_at"] = data["stage2_started_at"]
+
+                if "stage2_completed_at" in data:
+                    update_data["stage2_completed_at"] = data["stage2_completed_at"]
+
+                if "stage2_worker_id" in data:
+                    update_data["stage2_worker_id"] = data["stage2_worker_id"]
 
                 operation = UpdateOne(filter_query, {"$set": update_data})
                 bulk_operations.append(operation)

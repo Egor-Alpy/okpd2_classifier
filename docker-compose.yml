@@ -72,5 +72,29 @@ services:
     network_mode: "host"
     command: python -m src.workers.classification_worker --worker-id worker_1
 
+  classification-worker-stage2:
+    build: .
+    env_file:
+      - .env
+    environment:
+      - WORKER_ID=stage2_worker_1
+      - REDIS_URL=redis://redis:6379
+      # Меньший батч для второго этапа
+      - CLASSIFICATION_BATCH_SIZE=15
+      - RATE_LIMIT_DELAY=10
+      - MAX_RETRIES=3
+      # Прокси настройки (если указаны в .env)
+      - HTTP_PROXY=${HTTP_PROXY}
+      - HTTPS_PROXY=${HTTPS_PROXY}
+      - SOCKS_PROXY=${SOCKS_PROXY}
+      - NO_PROXY=localhost,127.0.0.1,redis
+    depends_on:
+      - redis
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    # Используем host network mode для доступа к локальной MongoDB
+    network_mode: "host"
+    command: python -m src.workers.classification_worker_stage2 --worker-id stage2_worker_1
+
 volumes:
   redis_data:
