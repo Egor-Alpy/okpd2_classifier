@@ -1,22 +1,7 @@
 version: '3.8'
 
 services:
-  # Target MongoDB для хранения результатов классификации
-  mongodb:
-    image: mongo:7
-    ports:
-      - "27017:27017"
-    environment:
-      - MONGO_INITDB_DATABASE=okpd_classifier
-    volumes:
-      - mongo_data:/data/db
-    healthcheck:
-      test: echo 'db.runCommand("ping").ok' | mongosh localhost:27017/test --quiet
-      interval: 10s
-      timeout: 10s
-      retries: 5
-      start_period: 40s
-
+  # Только Redis в контейнере
   redis:
     image: redis:7-alpine
     ports:
@@ -31,19 +16,17 @@ services:
     env_file:
       - .env
     environment:
-      # Переопределяем для Docker network
-      - TARGET_MONGO_HOST=mongodb
+      # Используем локальную MongoDB (не меняем настройки)
       - REDIS_URL=redis://redis:6379
       # Прокси настройки (если указаны в .env)
       - HTTP_PROXY=${HTTP_PROXY}
       - HTTPS_PROXY=${HTTPS_PROXY}
       - SOCKS_PROXY=${SOCKS_PROXY}
-      - NO_PROXY=localhost,127.0.0.1,mongodb,redis
+      - NO_PROXY=localhost,127.0.0.1,redis
     depends_on:
-      mongodb:
-        condition: service_healthy
-      redis:
-        condition: service_started
+      - redis
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     command: uvicorn src.main:app --host 0.0.0.0 --port 8000
 
   migration-worker:
@@ -51,30 +34,26 @@ services:
     env_file:
       - .env
     environment:
-      # Переопределяем для Docker network
-      - TARGET_MONGO_HOST=mongodb
       - REDIS_URL=redis://redis:6379
       # Прокси настройки (если указаны в .env)
       - HTTP_PROXY=${HTTP_PROXY}
       - HTTPS_PROXY=${HTTPS_PROXY}
       - SOCKS_PROXY=${SOCKS_PROXY}
-      - NO_PROXY=localhost,127.0.0.1,mongodb,redis
+      - NO_PROXY=localhost,127.0.0.1,redis
     depends_on:
-      mongodb:
-        condition: service_healthy
-      redis:
-        condition: service_started
+      - redis
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    # Используем host network mode для доступа к локальной MongoDB
+    network_mode: "host"
     command: python -m src.workers.migration_worker
 
-  # Только один classification worker для избежания rate limit!
   classification-worker:
     build: .
     env_file:
       - .env
     environment:
       - WORKER_ID=worker_1
-      # Переопределяем для Docker network
-      - TARGET_MONGO_HOST=mongodb
       - REDIS_URL=redis://redis:6379
       # Важные настройки для rate limit
       - CLASSIFICATION_BATCH_SIZE=10
@@ -84,14 +63,14 @@ services:
       - HTTP_PROXY=${HTTP_PROXY}
       - HTTPS_PROXY=${HTTPS_PROXY}
       - SOCKS_PROXY=${SOCKS_PROXY}
-      - NO_PROXY=localhost,127.0.0.1,mongodb,redis
+      - NO_PROXY=localhost,127.0.0.1,redis
     depends_on:
-      mongodb:
-        condition: service_healthy
-      redis:
-        condition: service_started
+      - redis
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    # Используем host network mode для доступа к локальной MongoDB
+    network_mode: "host"
     command: python -m src.workers.classification_worker --worker-id worker_1
 
 volumes:
-  mongo_data:
   redis_data:
