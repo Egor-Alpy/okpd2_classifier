@@ -17,7 +17,7 @@ class ProductStageOne(BaseModel):
     collection_name: str = Field(..., description="Название коллекции БД откуда взяли товар")
     old_mongo_id: str = Field(..., description="Mongo ID товара который мы взяли")
     title: str = Field(..., description="Наименование товара")
-    okpd_group: Optional[List[str]] = Field(None, description="Основная категория, которая из 2х цифр")
+    okpd_group: Optional[List[str]] = Field(None, description="Массив 5-значных групп ОКПД2 (формат XX.XX.X)")
     status_stg1: ProductStatus = Field(ProductStatus.PENDING, description="Статус классификации первого этапа")
     created_at: datetime = Field(default_factory=datetime.utcnow, description="Когда начали классификацию")
 
