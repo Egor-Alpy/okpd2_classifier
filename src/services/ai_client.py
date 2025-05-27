@@ -3,6 +3,7 @@ from typing import List, Dict, Any, Optional
 import logging
 import re
 import httpx
+import os
 from src.core.config import settings
 
 logger = logging.getLogger(__name__)
@@ -76,126 +77,84 @@ class AnthropicClient:
 class PromptBuilder:
     """Построитель промптов для классификации"""
 
-    @staticmethod
-    def build_stage_one_prompt(products: List[str]) -> str:
-        """Построить промпт для первого этапа"""
-        products_text = "\n".join(products)
+    # Путь к файлу с шаблоном промпта
+    PROMPT_TEMPLATE_PATH = "prompts/stage1_prompt_template.txt"
 
-        prompt = f"""ЗАДАЧА: Определить ВСЕ ВОЗМОЖНЫЕ основные классы ОКПД2 для каждого товара (первые 2 цифры кода).
+    # Путь к файлу со списком групп ОКПД2 (будет создан пользователем)
+    OKPD2_GROUPS_PATH = "data/okpd2_5digit_groups.txt"
+
+    def __init__(self):
+        self._prompt_template = None
+        self._okpd2_groups = None
+        self._load_resources()
+
+    def _load_resources(self):
+        """Загрузить шаблон промпта и список групп ОКПД2"""
+        # Загружаем шаблон промпта
+        try:
+            with open(self.PROMPT_TEMPLATE_PATH, 'r', encoding='utf-8') as f:
+                self._prompt_template = f.read()
+            logger.info(f"Loaded prompt template from {self.PROMPT_TEMPLATE_PATH}")
+        except Exception as e:
+            logger.error(f"Failed to load prompt template: {e}")
+            # Используем встроенный шаблон как fallback
+            self._prompt_template = self._get_fallback_template()
+
+        # Загружаем список групп ОКПД2
+        try:
+            if os.path.exists(self.OKPD2_GROUPS_PATH):
+                with open(self.OKPD2_GROUPS_PATH, 'r', encoding='utf-8') as f:
+                    self._okpd2_groups = f.read()
+                logger.info(f"Loaded OKPD2 groups from {self.OKPD2_GROUPS_PATH}")
+            else:
+                logger.warning(f"OKPD2 groups file not found at {self.OKPD2_GROUPS_PATH}")
+                logger.warning("Please create this file with format: XX.XX.X - Group Name")
+                self._okpd2_groups = "# PLACEHOLDER: Please add OKPD2 5-digit groups here"
+        except Exception as e:
+            logger.error(f"Failed to load OKPD2 groups: {e}")
+            self._okpd2_groups = "# ERROR loading OKPD2 groups"
+
+    def _get_fallback_template(self) -> str:
+        """Встроенный шаблон промпта как fallback"""
+        return """ЗАДАЧА: Определить ВСЕ ВОЗМОЖНЫЕ группы ОКПД2 для каждого товара (первые 5 цифр кода в формате XX.XX.X).
 
 ИНСТРУКЦИИ:
-1. Для каждого товара определите ВСЕ подходящие классы (XX)
-2. Если товар может относиться к НЕСКОЛЬКИМ классам - укажите ВСЕ через символ "|"
-3. Возвращайте в формате: "Название товара|XX" или "Название товара|XX|YY|ZZ"
-4. Если товар НЕ подходит НИ ПОД ОДИН класс - НЕ выводите его
+1. Для каждого товара определите ВСЕ подходящие группы (XX.XX.X)
+2. Если товар может относиться к НЕСКОЛЬКИМ группам - укажите ВСЕ через символ "|"
+3. Возвращайте в формате: "Название товара|XX.XX.X" или "Название товара|XX.XX.X|YY.YY.Y"
+4. Если товар НЕ подходит НИ ПОД ОДНУ группу - НЕ выводите его
 5. НЕ добавляйте пояснения или комментарии
-6. Лучше указать больше потенциальных классов, чем пропустить подходящий
-
-ПРАВИЛА МНОЖЕСТВЕННОЙ КЛАССИФИКАЦИИ:
-- Указывайте несколько классов, если товар:
-  • Может использоваться в разных сферах
-  • Имеет характеристики нескольких категорий
-  • Является комплексным изделием
-  • Может классифицироваться по-разному в зависимости от контекста
-- Приоритет: лучше перестраховаться на первом этапе
+6. Лучше указать больше потенциальных групп, чем пропустить подходящую
 
 ФОРМАТ ВЫВОДА:
-Название товара|XX
-Название товара|XX|YY
-Название товара|XX|YY|ZZ
+Название товара|XX.XX.X
+Название товара|XX.XX.X|YY.YY.Y
 
-ОСНОВНЫЕ КЛАССЫ ОКПД2:
-01 - Продукция сельского хозяйства
-02 - Продукция лесоводства
-03 - Рыба и рыбоводство
-05 - Уголь
-06 - Нефть и газ
-07 - Руды металлические
-08 - Полезные ископаемые прочие
-10 - Продукты пищевые
-11 - Напитки
-12 - Табачные изделия
-13 - Текстиль
-14 - Одежда
-15 - Кожа и изделия из кожи
-16 - Древесина и изделия из дерева
-17 - Бумага и бумажные изделия
-18 - Услуги печатные
-19 - Нефтепродукты
-20 - Химические вещества
-21 - Лекарственные средства
-22 - Изделия резиновые и пластмассовые
-23 - Минеральные продукты неметаллические
-24 - Металлы основные
-25 - Металлические изделия готовые
-26 - Компьютеры и электроника
-27 - Оборудование электрическое
-28 - Машины и оборудование
-29 - Автотранспортные средства
-30 - Транспортные средства прочие
-31 - Мебель
-32 - Изделия готовые прочие
-33 - Ремонт машин и оборудования
-35 - Электроэнергия, газ, пар
-36 - Водоснабжение
-38 - Утилизация отходов
-41 - Здания
-42 - Сооружения
-43 - Строительные работы специальные
-45 - Торговля автотранспортом
-46 - Оптовая торговля
-47 - Розничная торговля
-49 - Наземный транспорт
-50 - Водный транспорт
-51 - Воздушный транспорт
-52 - Складирование
-53 - Почта и курьерские услуги
-55 - Гостиницы
-56 - Общественное питание
-58 - Издательская деятельность
-59 - Кино и видео
-60 - Теле- и радиовещание
-61 - Телекоммуникации
-62 - Программное обеспечение
-63 - Информационные услуги
-64 - Финансовые услуги
-65 - Страхование
-68 - Недвижимость
-69 - Юридические и бухгалтерские услуги
-70 - Консалтинг
-71 - Архитектура и инжиниринг
-72 - Научные исследования
-73 - Реклама
-74 - Прочие профессиональные услуги
-75 - Ветеринария
-77 - Аренда и лизинг
-78 - Трудоустройство
-79 - Туризм
-80 - Охранная деятельность
-81 - Обслуживание зданий
-82 - Административные услуги
-84 - Государственное управление
-85 - Образование
-86 - Здравоохранение
-87 - Социальный уход
-88 - Социальные услуги
-90 - Творчество и развлечения
-91 - Библиотеки, архивы, музеи
-92 - Азартные игры
-93 - Спорт и отдых
-94 - Общественные организации
-95 - Ремонт компьютеров и бытовых товаров
-96 - Персональные услуги
+ГРУППЫ ОКПД2:
+{OKPD2_GROUPS_PLACEHOLDER}
 
 СПИСОК ТОВАРОВ:
-{products_text}"""
+{PRODUCTS_LIST}"""
+
+    def build_stage_one_prompt(self, products: List[str]) -> str:
+        """Построить промпт для первого этапа с 5-значными группами"""
+        products_text = "\n".join(products)
+
+        # Заменяем плейсхолдеры в шаблоне
+        prompt = self._prompt_template.replace(
+            "{OKPD2_GROUPS_PLACEHOLDER}",
+            self._okpd2_groups
+        ).replace(
+            "{PRODUCTS_LIST}",
+            products_text
+        )
 
         return prompt
 
     @staticmethod
     def parse_classification_response(response: str, product_map: Dict[str, str]) -> Dict[str, List[str]]:
         """
-        Парсинг ответа от AI с поддержкой множественных групп
+        Парсинг ответа от AI с поддержкой 5-значных групп ОКПД2
 
         Args:
             response: Ответ от AI
@@ -205,6 +164,9 @@ class PromptBuilder:
             Dict с результатами {product_id: [группы]}
         """
         results = {}
+
+        # Регулярное выражение для 5-значных кодов ОКПД2 (XX.XX.X)
+        okpd2_pattern = re.compile(r'^\d{2}\.\d{2}\.\d$')
 
         for line in response.strip().split('\n'):
             if '|' not in line:
@@ -236,12 +198,14 @@ class PromptBuilder:
                         break
 
             if product_id:
-                # Извлекаем ВСЕ группы
+                # Извлекаем ВСЕ группы с валидацией формата
                 groups = []
                 for group in parts[1:]:
                     group = group.strip()
-                    if re.match(r'^\d{2}$', group):
+                    if okpd2_pattern.match(group):
                         groups.append(group)
+                    else:
+                        logger.warning(f"Invalid OKPD2 group format: {group}")
 
                 if groups:
                     # Убираем дубликаты
@@ -254,5 +218,7 @@ class PromptBuilder:
 
                     results[product_id] = unique_groups
                     logger.debug(f"Product '{product_name}' classified with groups: {unique_groups}")
+                else:
+                    logger.warning(f"No valid groups found for product '{product_name}'")
 
         return results
