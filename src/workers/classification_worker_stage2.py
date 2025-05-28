@@ -82,7 +82,7 @@ class ClassificationWorkerStage2:
             )
 
             # Используем меньший размер батча для второго этапа
-            batch_size = min(settings.classification_batch_size, 20)
+            batch_size = min(settings.classification_batch_size, 10)
 
             logger.info(f"Creating stage 2 classifier with batch_size={batch_size}")
             self.classifier = StageTwoClassifier(
