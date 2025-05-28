@@ -112,40 +112,37 @@ class PromptBuilderStage2:
 
     def _get_class_structure(self, okpd_class: str) -> str:
         """Получить иерархическую структуру класса"""
-        if not self._okpd2_tree or okpd_class not in self._okpd2_tree:
+        if not self._okpd2_tree or okpd_class not in self._okpd2_tree.keys():
             logger.warning(f"Class {okpd_class} not found in OKPD2 tree")
             return f"# Структура класса {okpd_class} не загружена"
 
-        # Рекурсивно строим структуру
+        # Получаем данные класса
+        class_data = self._okpd2_tree[okpd_class]
+
+        # Строим структуру
         lines = []
-        self._build_structure_lines(self._okpd2_tree[okpd_class], lines, 0)
+        self._build_structure_lines(okpd_class, class_data, lines, 0)
 
         return "\n".join(lines)
 
-    def _build_structure_lines(self, node: Dict, lines: List[str], level: int):
+    def _build_structure_lines(self, current_code: str, data: Dict, lines: List[str], level: int):
         """Рекурсивно построить строки структуры"""
-        # Сортируем ключи для правильного порядка
-        sorted_keys = sorted(node.keys())
+        # Сортируем ключи по длине и алфавиту для правильного порядка
+        sorted_keys = sorted(data.keys(), key=lambda x: (len(x.split('.')), x))
 
         for key in sorted_keys:
-            value = node[key]
+            value = data[key]
 
             # Определяем отступ
             indent = "  " * level
 
+            # Если это строка - это описание кода
             if isinstance(value, str):
-                # Это конечный узел с описанием
                 lines.append(f"{indent}{key} - {value}")
+            # Если это словарь - рекурсивно обрабатываем (не должно быть в вашем формате)
             elif isinstance(value, dict):
-                # Это узел с подуровнями
-                # Сначала добавляем сам узел (если есть описание)
-                if key in value and isinstance(value[key], str):
-                    lines.append(f"{indent}{key} - {value[key]}")
-                else:
-                    lines.append(f"{indent}{key}")
-
-                # Рекурсивно добавляем подуровни
-                self._build_structure_lines(value, lines, level + 1)
+                # В вашем формате не должно быть вложенных словарей
+                logger.warning(f"Unexpected nested dict for key {key}")
 
     def _get_class_name(self, okpd_class: str) -> str:
         """Получить название класса"""
@@ -154,7 +151,7 @@ class PromptBuilderStage2:
 
         class_data = self._okpd2_tree[okpd_class]
 
-        # Ищем название класса
+        # Ищем название класса - это должен быть ключ с тем же кодом
         if okpd_class in class_data and isinstance(class_data[okpd_class], str):
             return class_data[okpd_class]
 
@@ -235,26 +232,11 @@ class PromptBuilderStage2:
         if okpd_class not in self._okpd2_tree:
             return None
 
-        # Ищем код в дереве класса
-        class_tree = self._okpd2_tree[okpd_class]
+        # В вашем формате все коды класса хранятся на одном уровне
+        class_data = self._okpd2_tree[okpd_class]
 
-        # Рекурсивный поиск
-        return self._find_code_in_tree(code, class_tree)
-
-    def _find_code_in_tree(self, code: str, tree: Dict) -> Optional[str]:
-        """Рекурсивно найти описание кода в дереве"""
-        if code in tree:
-            value = tree[code]
-            if isinstance(value, str):
-                return value
-            elif isinstance(value, dict) and code in value:
-                return value[code]
-
-        # Рекурсивный поиск в поддеревьях
-        for key, value in tree.items():
-            if isinstance(value, dict):
-                result = self._find_code_in_tree(code, value)
-                if result:
-                    return result
+        # Просто проверяем, есть ли код в словаре класса
+        if code in class_data and isinstance(class_data[code], str):
+            return class_data[code]
 
         return None

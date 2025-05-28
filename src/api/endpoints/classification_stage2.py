@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from typing import Optional, List
 import logging
+from datetime import datetime
 
 from src.api.dependencies import get_target_store, verify_api_key
 from src.models.domain import ProductStatus
@@ -19,9 +20,9 @@ async def get_available_classes(
     # Находим все уникальные 2-значные классы из 5-значных групп
     pipeline = [
         {"$match": {"status_stg1": ProductStatus.CLASSIFIED.value}},
-        {"$unwind": "$okpd_group"},
+        {"$unwind": "$okpd_group"},  # Разворачиваем массив
         {"$project": {
-            "okpd_class": {"$substr": ["$okpd_group", 0, 2]}
+            "okpd_class": {"$substr": ["$okpd_group", 0, 2]}  # Теперь okpd_group - строка
         }},
         {"$group": {
             "_id": "$okpd_class",
@@ -275,7 +276,3 @@ async def reset_failed_stage2_products(
         "reset_count": result.modified_count,
         "message": f"Reset {result.modified_count} failed products to pending for stage 2"
     }
-
-
-# Необходимо добавить импорт datetime
-from datetime import datetime

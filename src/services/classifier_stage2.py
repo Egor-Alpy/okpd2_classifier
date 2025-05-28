@@ -158,7 +158,6 @@ class StageTwoClassifier:
                     "data": {
                         "status_stg2": ProductStatusStage2.CLASSIFIED.value,
                         "okpd2_code": code,
-                        "okpd2_name": code_name,
                         "stage2_completed_at": current_time
                     }
                 })
@@ -302,12 +301,14 @@ class StageTwoClassifier:
                 }
             },
             {
+                # Сначала разворачиваем массив okpd_group
+                "$unwind": "$okpd_group"
+            },
+            {
+                # Теперь можем использовать $substr на строке
                 "$project": {
                     "okpd_class": {"$substr": ["$okpd_group", 0, 2]}
                 }
-            },
-            {
-                "$unwind": "$okpd_class"
             },
             {
                 "$group": {
@@ -373,4 +374,3 @@ class StageTwoClassifier:
                     }
                 )
                 logger.info(f"Stage 2 job for class {okpd_class} completed")
-                
