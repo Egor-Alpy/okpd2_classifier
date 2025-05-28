@@ -2,7 +2,7 @@ import logging
 import re
 import json
 import os
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Set
 
 logger = logging.getLogger(__name__)
 
@@ -48,114 +48,103 @@ class PromptBuilderStage2:
 
     def _get_fallback_template(self) -> str:
         """Встроенный шаблон промпта как fallback"""
-        return """ЗАДАЧА: Найти МАКСИМАЛЬНО ТОЧНЫЙ код ОКПД2 для товаров внутри класса [{CLASS_CODE} - {CLASS_NAME}] или НЕ ВОЗВРАЩАТЬ товар, если точного соответствия нет.
+        return """ЗАДАЧА: Найти ОДИН МАКСИМАЛЬНО ТОЧНЫЙ код ОКПД2 для каждого товара из предоставленных веток.
 
 ИНСТРУКЦИИ:
-1. Все товары предварительно отнесены к классу {CLASS_CODE}
-2. Найдите НАИБОЛЕЕ СПЕЦИФИЧНЫЙ и ТОЧНЫЙ код внутри данного класса
-3. Используйте СТРОГИЙ ИЕРАРХИЧЕСКИЙ подход: класс → подкласс → группа → подгруппа → вид → категория → подкатегория
-4. Возвращайте ТОЛЬКО если есть ТОЧНОЕ соответствие описанию в классификаторе
-5. Формат вывода: "Название товара|Полный код"
-6. Если НЕТ точного соответствия - НЕ ВЫВОДИТЕ товар вообще
-
-АЛГОРИТМ ПОИСКА:
-1. Начните с изучения всех подклассов ({CLASS_CODE}.X)
-2. Выберите наиболее подходящий подкласс
-3. Внутри подкласса изучите все группы ({CLASS_CODE}.XX)
-4. Продолжайте углубляться до самого детального уровня
-5. ВАЖНО: Выбирайте код только если описание ТОЧНО соответствует товару
-6. При сомнениях - лучше НЕ классифицировать
-
-КРИТЕРИИ ТОЧНОГО СООТВЕТСТВИЯ:
-- Товар подпадает под описание кода
-- Учтены все ключевые характеристики товара
-- Нет противоречий между товаром и описанием кода
-- Если есть выбор между общим и специфичным кодом - выбирайте специфичный
-
-ПРАВИЛА ОТСЕИВАНИЯ:
-- НЕ используйте коды "прочие" (.9, .99, .190, .999 и т.д.) без крайней необходимости
-- НЕ классифицируйте, если товар лишь частично соответствует описанию
-- НЕ выводите товар, если его характеристики противоречат описанию кода
-- НЕ угадывайте - при неуверенности товар исключается
+1. Для каждого товара изучите ВСЕ предоставленные коды
+2. Выберите ОДИН НАИБОЛЕЕ ТОЧНЫЙ код
+3. Возвращайте в формате: "Название товара|Полный код"
+4. Если НИ ОДИН код не подходит - НЕ выводите товар
 
 ФОРМАТ ВЫВОДА:
 Название товара|XX.XX.XX.XXX
 
-ДЕТАЛЬНАЯ СТРУКТУРА КЛАССА [{CLASS_CODE}]:
-{CLASS_STRUCTURE}
+ДОСТУПНЫЕ КОДЫ:
+{OKPD2_CODES}
 
 СПИСОК ТОВАРОВ:
 {PRODUCTS_LIST}"""
 
-    def build_stage_two_prompt(self, products: List[str], okpd_class: str) -> str:
+    def build_stage_two_prompt(self, products: List[Dict[str, Any]]) -> str:
         """
         Построить промпт для второго этапа
 
         Args:
-            products: Список названий товаров
-            okpd_class: 2-значный код класса ОКПД2
+            products: Список товаров с их топ-5 группами
+                     [{"title": "...", "okpd_groups": ["XX.XX.X", ...]}]
         """
-        # Получаем структуру класса из дерева
-        class_structure = self._get_class_structure(okpd_class)
-        class_name = self._get_class_name(okpd_class)
+        # Собираем все уникальные группы из всех товаров
+        all_groups = set()
+        for product in products:
+            if product.get("okpd_group"):
+                all_groups.update(product["okpd_group"])
+
+        # Получаем все коды для этих групп
+        all_codes = self._get_all_codes_for_groups(list(all_groups))
 
         # Формируем список товаров
-        products_text = "\n".join(products)
+        products_text = "\n".join([p["title"] for p in products])
+
+        # Формируем текст с кодами
+        codes_text = self._format_codes_text(all_codes)
 
         # Заменяем плейсхолдеры в шаблоне
-        prompt = self._prompt_template.replace("{CLASS_CODE}", okpd_class)
-        prompt = prompt.replace("{CLASS_NAME}", class_name)
-        prompt = prompt.replace("{CLASS_STRUCTURE}", class_structure)
+        prompt = self._prompt_template.replace("{OKPD2_CODES}", codes_text)
         prompt = prompt.replace("{PRODUCTS_LIST}", products_text)
 
         return prompt
 
-    def _get_class_structure(self, okpd_class: str) -> str:
-        """Получить иерархическую структуру класса"""
-        if not self._okpd2_tree or okpd_class not in self._okpd2_tree:
-            logger.warning(f"Class {okpd_class} not found in OKPD2 tree")
-            return f"# Структура класса {okpd_class} не загружена"
+    def _get_all_codes_for_groups(self, groups: List[str]) -> Dict[str, str]:
+        """
+        Получить все коды-продолжения для списка 5-значных групп
 
-        # Получаем данные класса
-        class_data = self._okpd2_tree[okpd_class]
+        Args:
+            groups: Список 5-значных групп (XX.XX.X)
 
-        # Строим структуру
+        Returns:
+            Dict {код: описание} для всех продолжений
+        """
+        all_codes = {}
+
+        for group in groups:
+            # Получаем 2-значный класс из группы
+            class_code = group[:2]
+
+            if class_code not in self._okpd2_tree:
+                logger.warning(f"Class {class_code} not found in OKPD2 tree")
+                continue
+
+            class_data = self._okpd2_tree[class_code]
+
+            # Ищем все коды, начинающиеся с нашей группы
+            for code, description in class_data.items():
+                if code.startswith(group) and isinstance(description, str):
+                    all_codes[code] = description
+
+        logger.info(f"Found {len(all_codes)} codes for {len(groups)} groups")
+        return all_codes
+
+    def _format_codes_text(self, codes: Dict[str, str]) -> str:
+        """Форматировать коды для промпта"""
+        # Группируем коды по 5-значным группам для удобства
+        groups = {}
+        for code, description in codes.items():
+            # Извлекаем 5-значную группу
+            if len(code) >= 7:  # XX.XX.X
+                group = code[:7]
+                if group not in groups:
+                    groups[group] = []
+                groups[group].append((code, description))
+
+        # Формируем текст
         lines = []
-        self._build_structure_lines(okpd_class, class_data, lines, 0)
+        for group in sorted(groups.keys()):
+            lines.append(f"\n# Группа {group}")
+            # Сортируем коды внутри группы
+            for code, desc in sorted(groups[group]):
+                lines.append(f"{code} - {desc}")
 
         return "\n".join(lines)
-
-    def _build_structure_lines(self, current_code: str, data: Dict, lines: List[str], level: int):
-        """Рекурсивно построить строки структуры"""
-        # Сортируем ключи по длине и алфавиту для правильного порядка
-        sorted_keys = sorted(data.keys(), key=lambda x: (len(x.split('.')), x))
-
-        for key in sorted_keys:
-            value = data[key]
-
-            # Определяем отступ
-            indent = "  " * level
-
-            # Если это строка - это описание кода
-            if isinstance(value, str):
-                lines.append(f"{indent}{key} - {value}")
-            # Если это словарь - рекурсивно обрабатываем (не должно быть в вашем формате)
-            elif isinstance(value, dict):
-                # В вашем формате не должно быть вложенных словарей
-                logger.warning(f"Unexpected nested dict for key {key}")
-
-    def _get_class_name(self, okpd_class: str) -> str:
-        """Получить название класса"""
-        if not self._okpd2_tree or okpd_class not in self._okpd2_tree:
-            return "Неизвестный класс"
-
-        class_data = self._okpd2_tree[okpd_class]
-
-        # Ищем название класса - это должен быть ключ с тем же кодом
-        if okpd_class in class_data and isinstance(class_data[okpd_class], str):
-            return class_data[okpd_class]
-
-        return "Класс без названия"
 
     @staticmethod
     def parse_stage2_response(response: str, product_map: Dict[str, str]) -> Dict[str, Dict[str, str]]:
@@ -172,7 +161,6 @@ class PromptBuilderStage2:
         results = {}
 
         # Регулярное выражение для полных кодов ОКПД2
-        # Поддерживаем форматы: XX.XX.X, XX.XX.XX, XX.XX.XX.XXX
         okpd2_pattern = re.compile(r'^\d{2}\.\d{2}\.\d+(\.\d+)*$')
 
         for line in response.strip().split('\n'):
@@ -213,7 +201,7 @@ class PromptBuilderStage2:
             if product_id:
                 results[product_id] = {
                     "code": code,
-                    "name": product_name  # Сохраняем название для отладки
+                    "name": product_name
                 }
                 logger.debug(f"Product '{product_name}' classified with code: {code}")
             else:
@@ -232,10 +220,9 @@ class PromptBuilderStage2:
         if okpd_class not in self._okpd2_tree:
             return None
 
-        # В вашем формате все коды класса хранятся на одном уровне
         class_data = self._okpd2_tree[okpd_class]
 
-        # Просто проверяем, есть ли код в словаре класса
+        # Проверяем, есть ли код в словаре класса
         if code in class_data and isinstance(class_data[code], str):
             return class_data[code]
 

@@ -23,15 +23,12 @@ logger = logging.getLogger(__name__)
 class ClassificationWorkerStage2:
     """Воркер для классификации товаров на втором этапе"""
 
-    def __init__(self, worker_id: str = "stage2_worker_1", okpd_class: Optional[str] = None):
+    def __init__(self, worker_id: str = "stage2_worker_1"):
         self.worker_id = worker_id
-        self.okpd_class = okpd_class
         self.target_store = None
         self.classifier = None
         self.running = False
         logger.info(f"Initializing stage 2 classification worker: {self.worker_id}")
-        if self.okpd_class:
-            logger.info(f"Worker will process only class: {self.okpd_class}")
 
     async def start(self):
         """Запустить воркер"""
@@ -47,25 +44,15 @@ class ClassificationWorkerStage2:
             await self.target_store.initialize()
 
             # Проверяем наличие товаров для второго этапа
-            if self.okpd_class:
-                count = await self.target_store.products.count_documents({
-                    "status_stg1": "classified",
-                    "okpd_group": {"$regex": f"^{self.okpd_class}\\."},
-                    "$or": [
-                        {"status_stg2": {"$exists": False}},
-                        {"status_stg2": "pending"}
-                    ]
-                })
-                logger.info(f"Found {count} products to process in class {self.okpd_class}")
-            else:
-                count = await self.target_store.products.count_documents({
-                    "status_stg1": "classified",
-                    "$or": [
-                        {"status_stg2": {"$exists": False}},
-                        {"status_stg2": "pending"}
-                    ]
-                })
-                logger.info(f"Found {count} total products to process across all classes")
+            count = await self.target_store.products.count_documents({
+                "status_stg1": "classified",
+                "okpd_group": {"$exists": True, "$ne": []},
+                "$or": [
+                    {"status_stg2": {"$exists": False}},
+                    {"status_stg2": "pending"}
+                ]
+            })
+            logger.info(f"Found {count} products ready for stage 2 classification")
 
             if count == 0:
                 logger.warning("No products found for stage 2 classification!")
@@ -82,7 +69,7 @@ class ClassificationWorkerStage2:
             )
 
             # Используем меньший размер батча для второго этапа
-            batch_size = min(settings.classification_batch_size, 10)
+            batch_size = min(settings.classification_batch_size, 15)
 
             logger.info(f"Creating stage 2 classifier with batch_size={batch_size}")
             self.classifier = StageTwoClassifier(
@@ -92,11 +79,19 @@ class ClassificationWorkerStage2:
                 worker_id=self.worker_id
             )
 
+            # Проверяем наличие файла с полным деревом ОКПД2
+            import os
+            if not os.path.exists("src/data/okpd2_full_tree.json"):
+                logger.error("OKPD2 full tree file not found at src/data/okpd2_full_tree.json")
+                logger.error("Please create this file with the complete OKPD2 hierarchy")
+                logger.error("Format: {\"XX\": {\"XX.XX.X\": \"Description\", ...}, ...}")
+                return
+
             self.running = True
             logger.info(f"Worker {self.worker_id} initialized successfully. Starting continuous classification...")
 
             # Запускаем непрерывную классификацию
-            await self.classifier.run_continuous_classification(self.okpd_class)
+            await self.classifier.run_continuous_classification()
 
         except KeyboardInterrupt:
             logger.info(f"Stage 2 worker {self.worker_id} interrupted by user")
@@ -125,7 +120,6 @@ async def main():
 
     parser = argparse.ArgumentParser(description='Stage 2 Classification worker')
     parser.add_argument('--worker-id', default='stage2_worker_1', help='Worker ID')
-    parser.add_argument('--class', dest='okpd_class', help='Process only specific OKPD class (e.g., 17)')
     parser.add_argument('--log-level', default='INFO',
                         choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'],
                         help='Logging level')
@@ -143,14 +137,15 @@ async def main():
     logger.info("=" * 60)
     logger.info(f"Worker ID: {args.worker_id}")
     logger.info(f"Log Level: {args.log_level}")
-    logger.info(f"Target Class: {args.okpd_class or 'All classes'}")
-    logger.info(f"Batch Size: {min(settings.classification_batch_size, 20)}")
+    logger.info(f"Batch Size: {min(settings.classification_batch_size, 15)}")
     logger.info(f"Rate Limit Delay: {settings.rate_limit_delay}s")
     logger.info(f"Max Retries: {settings.max_retries}")
     logger.info("=" * 60)
+    logger.info("ВАЖНО: Второй этап теперь обрабатывает все топ-5 групп одновременно!")
+    logger.info("=" * 60)
 
     try:
-        worker = ClassificationWorkerStage2(args.worker_id, args.okpd_class)
+        worker = ClassificationWorkerStage2(args.worker_id)
         await worker.start()
     except KeyboardInterrupt:
         logger.info("Shutdown requested by user")

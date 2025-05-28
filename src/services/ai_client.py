@@ -116,18 +116,19 @@ class PromptBuilder:
 
     def _get_fallback_template(self) -> str:
         """Встроенный шаблон промпта как fallback"""
-        return """ЗАДАЧА: Определить группу ОКПД2 для каждого товара (первые 5 цифр кода в формате XX.XX.X).
+        return """ЗАДАЧА: Определить ТОП-5 НАИБОЛЕЕ ПОДХОДЯЩИХ групп ОКПД2 для каждого товара (первые 5 цифр кода в формате XX.XX.X).
 
 ИНСТРУКЦИИ:
-1. Для абсолютно каждого товара определите ОДНУ подходящую группу (XX.XX.X)
-2. Возвращайте в формате: "Название товара|XX.XX.X"
-3. Если товар НЕ подходит НИ ПОД ОДНУ группу - НЕ выводите его
-4. НЕ добавляйте пояснения или комментарии
-5. Очень внимательно и подробно изучи все категории!
-6. Старайся искать соответствия по возрастанию кол-ва цифр, каждая последующая цифра уточняет категорию
+1. Для каждого товара определите от 1 до 5 НАИБОЛЕЕ ПОДХОДЯЩИХ групп (XX.XX.X)
+2. Расположите группы В ПОРЯДКЕ УБЫВАНИЯ РЕЛЕВАНТНОСТИ
+3. Возвращайте в формате: "Название товара|XX.XX.X|YY.YY.Y|ZZ.ZZ.Z"
+4. Если товар НЕ подходит НИ ПОД ОДНУ группу - НЕ выводите его
+5. НЕ добавляйте пояснения или комментарии
+6. Лучше выбрать больше категорий, чем меньше!
 
 ФОРМАТ ВЫВОДА:
 Название товара|XX.XX.X
+Название товара|XX.XX.X|YY.YY.Y
 
 ГРУППЫ ОКПД2:
 {OKPD2_GROUPS_PLACEHOLDER}
@@ -136,7 +137,7 @@ class PromptBuilder:
 {PRODUCTS_LIST}"""
 
     def build_stage_one_prompt(self, products: List[str]) -> str:
-        """Построить промпт для первого этапа с 5-значными группами"""
+        """Построить промпт для первого этапа с топ-5 группами"""
         products_text = "\n".join(products)
 
         # Заменяем плейсхолдеры в шаблоне
@@ -153,14 +154,14 @@ class PromptBuilder:
     @staticmethod
     def parse_classification_response(response: str, product_map: Dict[str, str]) -> Dict[str, List[str]]:
         """
-        Парсинг ответа от AI с поддержкой 5-значных групп ОКПД2
+        Парсинг ответа от AI с поддержкой топ-5 групп ОКПД2
 
         Args:
             response: Ответ от AI
             product_map: Маппинг {название товара: id товара}
 
         Returns:
-            Dict с результатами {product_id: [группы]}
+            Dict с результатами {product_id: [группы в порядке убывания релевантности]}
         """
         results = {}
 
@@ -197,9 +198,9 @@ class PromptBuilder:
                         break
 
             if product_id:
-                # Извлекаем ВСЕ группы с валидацией формата
+                # Извлекаем группы с валидацией формата (максимум 5)
                 groups = []
-                for group in parts[1:]:
+                for group in parts[1:6]:  # Берем максимум 5 групп
                     group = group.strip()
                     if okpd2_pattern.match(group):
                         groups.append(group)
@@ -207,16 +208,9 @@ class PromptBuilder:
                         logger.warning(f"Invalid OKPD2 group format: {group}")
 
                 if groups:
-                    # Убираем дубликаты
-                    seen = set()
-                    unique_groups = []
-                    for g in groups:
-                        if g not in seen:
-                            seen.add(g)
-                            unique_groups.append(g)
-
-                    results[product_id] = unique_groups
-                    logger.debug(f"Product '{product_name}' classified with groups: {unique_groups}")
+                    # Сохраняем порядок (первая группа - самая релевантная)
+                    results[product_id] = groups
+                    logger.debug(f"Product '{product_name}' classified with top groups: {groups}")
                 else:
                     logger.warning(f"No valid groups found for product '{product_name}'")
 

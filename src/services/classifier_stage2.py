@@ -23,7 +23,7 @@ class StageTwoClassifier:
             self,
             ai_client: AnthropicClient,
             target_store: TargetMongoStore,
-            batch_size: int = 20,  # Меньше, чем на первом этапе
+            batch_size: int = 15,  # Меньше, т.к. промпт будет больше
             worker_id: str = None
     ):
         self.ai_client = ai_client
@@ -39,7 +39,7 @@ class StageTwoClassifier:
         logger.info(f"Stage 2 Classifier initialized with batch_size={batch_size}, "
                     f"rate_limit_delay={self.rate_limit_delay}s")
 
-    async def process_batch(self, products: List[Dict[str, Any]], okpd_class: str) -> Dict[str, Any]:
+    async def process_batch(self, products: List[Dict[str, Any]]) -> Dict[str, Any]:
         """Обработать батч товаров второго этапа"""
         if not products:
             return {
@@ -51,7 +51,7 @@ class StageTwoClassifier:
             }
 
         batch_id = f"s2_batch_{uuid.uuid4().hex[:8]}"
-        logger.info(f"Processing stage 2 batch {batch_id} with {len(products)} products for class {okpd_class}")
+        logger.info(f"Processing stage 2 batch {batch_id} with {len(products)} products")
 
         start_time = time.time()
         product_ids = [p["_id"] for p in products]
@@ -61,16 +61,13 @@ class StageTwoClassifier:
             try:
                 # Готовим данные для промпта
                 product_map = {}
-                product_names = []
-
                 for product in products:
                     product_id = product["_id"]
                     product_name = product["title"]
                     product_map[product_name] = product_id
-                    product_names.append(product_name)
 
-                # Формируем промпт с деревом класса
-                prompt = self.prompt_builder.build_stage_two_prompt(product_names, okpd_class)
+                # Формируем промпт со всеми группами всех товаров
+                prompt = self.prompt_builder.build_stage_two_prompt(products)
 
                 # Отправляем запрос к AI
                 response = await self.ai_client.classify_batch(prompt, max_tokens=4000)
@@ -158,7 +155,9 @@ class StageTwoClassifier:
                     "data": {
                         "status_stg2": ProductStatusStage2.CLASSIFIED.value,
                         "okpd2_code": code,
-                        "stage2_completed_at": current_time
+                        "okpd2_name": code_name,
+                        "stage2_completed_at": current_time,
+                        "stage2_batch_id": self.worker_id
                     }
                 })
                 logger.debug(f"Product {product_id} classified with exact code: {code}")
@@ -193,8 +192,8 @@ class StageTwoClassifier:
         if updates:
             await self.target_store.bulk_update_products(updates)
 
-    async def get_pending_products_for_class(self, okpd_class: str, limit: int) -> List[Dict[str, Any]]:
-        """Получить pending товары для конкретного класса"""
+    async def get_pending_products_batch(self, limit: int) -> List[Dict[str, Any]]:
+        """Получить батч pending товаров для второго этапа"""
         products = []
 
         # Атомарно получаем и блокируем товары
@@ -202,7 +201,7 @@ class StageTwoClassifier:
             doc = await self.target_store.products.find_one_and_update(
                 {
                     "status_stg1": ProductStatus.CLASSIFIED.value,
-                    "okpd_group": {"$regex": f"^{okpd_class}\\."},
+                    "okpd_group": {"$exists": True, "$ne": []},
                     "$or": [
                         {"status_stg2": {"$exists": False}},
                         {"status_stg2": ProductStatusStage2.PENDING.value}
@@ -224,61 +223,34 @@ class StageTwoClassifier:
                 break
 
         if products:
-            logger.info(f"Locked {len(products)} products for stage 2 processing in class {okpd_class}")
+            logger.info(f"Locked {len(products)} products for stage 2 processing")
 
         return products
 
-    async def run_continuous_classification(self, okpd_class: Optional[str] = None):
-        """
-        Запустить непрерывную классификацию второго этапа
-
-        Args:
-            okpd_class: Если указан, обрабатывать только этот класс
-        """
+    async def run_continuous_classification(self):
+        """Запустить непрерывную классификацию второго этапа"""
         logger.info(f"Starting continuous stage 2 classification for worker {self.worker_id}")
-
-        if okpd_class:
-            logger.info(f"Processing only class {okpd_class}")
 
         while True:
             try:
-                # Если класс не указан, выбираем класс с наибольшим количеством pending
-                if not okpd_class:
-                    current_class = await self._select_class_to_process()
-                    if not current_class:
-                        logger.info("No classes with pending products found")
-                        await asyncio.sleep(30)
-                        continue
-                else:
-                    current_class = okpd_class
-
                 # Получаем товары для обработки
-                products = await self.get_pending_products_for_class(current_class, self.batch_size)
+                products = await self.get_pending_products_batch(self.batch_size)
 
                 if not products:
-                    if okpd_class:
-                        # Если работаем с конкретным классом и товаров нет - ждем
-                        logger.info(f"No pending products for class {okpd_class}, waiting...")
-                        await asyncio.sleep(10)
-                    else:
-                        # Если работаем со всеми классами - переходим к следующему
-                        logger.info(f"No pending products for class {current_class}")
-                        await asyncio.sleep(2)
+                    logger.info("No pending products for stage 2, waiting...")
+                    await asyncio.sleep(10)
                     continue
 
-                logger.info(f"Worker {self.worker_id}: Got {len(products)} products from class {current_class}")
+                logger.info(f"Worker {self.worker_id}: Got {len(products)} products for stage 2")
 
                 # Обрабатываем батч
-                result = await self.process_batch(products, current_class)
+                result = await self.process_batch(products)
 
                 logger.info(
                     f"Worker {self.worker_id}: Stage 2 batch processed - "
                     f"classified: {result['classified']}, "
                     f"not classified: {result['none_classified']}"
                 )
-
-                # Обновляем статистику задачи если она есть
-                await self._update_job_stats(current_class, result)
 
                 # Задержка между батчами
                 logger.info(f"Worker {self.worker_id}: Waiting {self.rate_limit_delay}s before next batch...")
@@ -287,90 +259,3 @@ class StageTwoClassifier:
             except Exception as e:
                 logger.error(f"Error in continuous stage 2 classification: {e}", exc_info=True)
                 await asyncio.sleep(30)
-
-    async def _select_class_to_process(self) -> Optional[str]:
-        """Выбрать класс с наибольшим количеством pending товаров"""
-        pipeline = [
-            {
-                "$match": {
-                    "status_stg1": ProductStatus.CLASSIFIED.value,
-                    "$or": [
-                        {"status_stg2": {"$exists": False}},
-                        {"status_stg2": ProductStatusStage2.PENDING.value}
-                    ]
-                }
-            },
-            {
-                # Сначала разворачиваем массив okpd_group
-                "$unwind": "$okpd_group"
-            },
-            {
-                # Теперь можем использовать $substr на строке
-                "$project": {
-                    "okpd_class": {"$substr": ["$okpd_group", 0, 2]}
-                }
-            },
-            {
-                "$group": {
-                    "_id": "$okpd_class",
-                    "count": {"$sum": 1}
-                }
-            },
-            {
-                "$sort": {"count": -1}
-            },
-            {
-                "$limit": 1
-            }
-        ]
-
-        cursor = self.target_store.products.aggregate(pipeline)
-        result = await cursor.to_list(length=1)
-
-        if result:
-            return result[0]["_id"]
-
-        return None
-
-    async def _update_job_stats(self, okpd_class: str, batch_result: Dict[str, Any]):
-        """Обновить статистику задачи классификации"""
-        # Ищем активную задачу для этого класса
-        job = await self.target_store.db.classification_jobs_stage2.find_one({
-            "okpd_class": okpd_class,
-            "status": "running"
-        })
-
-        if job:
-            # Обновляем статистику
-            await self.target_store.db.classification_jobs_stage2.update_one(
-                {"_id": job["_id"]},
-                {
-                    "$inc": {
-                        "classified_products": batch_result["classified"],
-                        "none_classified_products": batch_result["none_classified"]
-                    },
-                    "$set": {
-                        "updated_at": datetime.utcnow()
-                    }
-                }
-            )
-
-            # Проверяем, завершена ли задача
-            updated_job = await self.target_store.db.classification_jobs_stage2.find_one({"_id": job["_id"]})
-
-            processed = (updated_job["classified_products"] +
-                         updated_job["none_classified_products"] +
-                         updated_job["failed_products"])
-
-            if processed >= updated_job["total_products"]:
-                # Задача завершена
-                await self.target_store.db.classification_jobs_stage2.update_one(
-                    {"_id": job["_id"]},
-                    {
-                        "$set": {
-                            "status": "completed",
-                            "completed_at": datetime.utcnow()
-                        }
-                    }
-                )
-                logger.info(f"Stage 2 job for class {okpd_class} completed")
