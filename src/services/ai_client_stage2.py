@@ -11,10 +11,10 @@ class PromptBuilderStage2:
     """Построитель промптов для второго этапа классификации"""
 
     # Путь к файлу с шаблоном промпта второго этапа
-    PROMPT_TEMPLATE_PATH = "prompts/stage2_prompt_template.txt"
+    PROMPT_TEMPLATE_PATH = "src/prompts/stage2_prompt_template.txt"
 
     # Путь к файлу с полным деревом ОКПД2
-    OKPD2_FULL_TREE_PATH = "data/okpd2_full_tree.json"
+    OKPD2_FULL_TREE_PATH = "src/data/okpd2_full_tree.json"
 
     def __init__(self):
         self._prompt_template = None
@@ -112,7 +112,7 @@ class PromptBuilderStage2:
 
     def _get_class_structure(self, okpd_class: str) -> str:
         """Получить иерархическую структуру класса"""
-        if not self._okpd2_tree or okpd_class not in self._okpd2_tree.keys():
+        if not self._okpd2_tree or okpd_class not in self._okpd2_tree:
             logger.warning(f"Class {okpd_class} not found in OKPD2 tree")
             return f"# Структура класса {okpd_class} не загружена"
 
