@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 class TargetMongoStore:
     """Работа с целевой MongoDB (наша новая БД)"""
 
-    def __init__(self, database_name: str):
+    def __init__(self, database_name: str, collection_name: str = "products_classifier"):
         connection_string = settings.target_mongodb_connection_string
         logger.info(f"Connecting to Target MongoDB with: {connection_string}")
 
@@ -25,8 +25,10 @@ class TargetMongoStore:
             connectTimeoutMS=5000
         )
         self.db: AsyncIOMotorDatabase = self.client[database_name]
-        self.products = self.db.products_stage_one
+        # Используем настраиваемое имя коллекции
+        self.products = self.db[collection_name]
         self.migration_jobs = self.db.migration_jobs
+        logger.info(f"Using collection: {collection_name}")
 
     async def initialize(self):
         """Инициализация хранилища"""
@@ -58,6 +60,7 @@ class TargetMongoStore:
             await self.products.create_index("status_stg1")
             await self.products.create_index("created_at")
             await self.products.create_index("okpd_group")
+            await self.products.create_index("status_stg2")  # Добавлен индекс для второго этапа
 
             # Индекс для migration_jobs
             await self.migration_jobs.create_index("job_id", unique=True)
