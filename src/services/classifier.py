@@ -35,7 +35,7 @@ class StageOneClassifier:
         logger.info(f"Cached content size: {len(self.cached_content):,} characters")
 
         # Rate limit settings
-        self.rate_limit_delay = int(os.getenv("RATE_LIMIT_DELAY", "5"))
+        self.rate_limit_delay = int(os.getenv("RATE_LIMIT_DELAY", "60"))
         self.max_retries = int(os.getenv("MAX_RETRIES", "3"))
 
         # Cache refresh
@@ -141,6 +141,19 @@ class StageOneClassifier:
                         await asyncio.sleep(wait_time)
                         continue
 
+                # Проверяем overloaded error (529)
+                elif "529" in error_str or "overloaded_error" in error_str:
+                    retry_count += 1
+
+                    if retry_count < self.max_retries + 2:  # Даем больше попыток для 529
+                        wait_time = 60 * retry_count  # Увеличиваем задержку для перегрузки
+                        logger.warning(
+                            f"API overloaded (529) for batch {batch_id}. "
+                            f"Retry {retry_count}/{self.max_retries + 2} after {wait_time}s delay."
+                        )
+                        await asyncio.sleep(wait_time)
+                        continue
+
                 logger.error(f"Error processing batch {batch_id}: {e}")
 
                 # Записываем метрику об ошибке
@@ -230,13 +243,18 @@ class StageOneClassifier:
         logger.info(f"Starting continuous classification for worker {self.worker_id}...")
         logger.info(f"Using prompt caching with Claude 3.7 Sonnet")
 
+        first_batch = True
+
         while True:
+            batch_size = 1 if first_batch else self.batch_size
+
             try:
                 # Получаем pending товары атомарно
                 products = await self.target_store.get_pending_products_atomic(
-                    self.batch_size,
+                    batch_size,
                     self.worker_id
                 )
+                first_batch = False
 
                 if not products:
                     logger.info(f"Worker {self.worker_id}: No pending products, waiting...")
