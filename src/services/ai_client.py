@@ -16,6 +16,7 @@ class AnthropicClient:
         self.model = model
         self.client = None
         self._http_client = None
+        self.enable_caching = settings.enable_prompt_caching
 
     async def _ensure_client(self):
         """Создать клиент при необходимости"""
@@ -34,19 +35,53 @@ class AnthropicClient:
                 logger.info("No proxy configured for Anthropic API")
                 self.client = AsyncAnthropic(api_key=self.api_key)
 
-    async def classify_batch(self, prompt: str, max_tokens: int = 4000) -> str:
-        """Отправить запрос на классификацию"""
+    async def classify_batch(self, prompt: str, cached_content: str = None, max_tokens: int = 4000) -> str:
+        """Отправить запрос на классификацию с поддержкой кэширования"""
         await self._ensure_client()
 
         try:
-            logger.debug(f"Sending request to Anthropic API via {'proxy' if self.proxy_url else 'direct connection'}")
+            # Формируем сообщение с кэшированием
+            if self.enable_caching and cached_content:
+                messages = [{
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": cached_content,
+                            "cache_control": {"type": "ephemeral"}
+                        },
+                        {
+                            "type": "text",
+                            "text": prompt  # Динамическая часть
+                        }
+                    ]
+                }]
+
+                # Добавляем header для prompt caching
+                extra_headers = {"anthropic-beta": "prompt-caching-2024-07-31"}
+
+                logger.debug("Sending request with prompt caching enabled")
+            else:
+                # Обычный запрос без кэширования
+                messages = [{"role": "user", "content": prompt}]
+                extra_headers = None
 
             response = await self.client.messages.create(
                 model=self.model,
                 max_tokens=max_tokens,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.0
+                messages=messages,
+                temperature=0.0,
+                extra_headers=extra_headers
             )
+
+            # Логируем информацию о кэше
+            if hasattr(response, 'usage'):
+                usage = response.usage
+                if hasattr(usage, 'cache_creation_input_tokens'):
+                    logger.info(f"Cache creation tokens: {usage.cache_creation_input_tokens}")
+                if hasattr(usage, 'cache_read_input_tokens'):
+                    logger.info(f"Cache read tokens: {usage.cache_read_input_tokens}")
+                logger.info(f"Total input tokens: {usage.input_tokens}")
 
             return response.content[0].text
 
@@ -75,97 +110,93 @@ class AnthropicClient:
 
 
 class PromptBuilder:
-    """Построитель промптов для классификации"""
+    """Построитель промптов для классификации с поддержкой кэширования"""
 
-    # Путь к файлу с шаблоном промпта
-    PROMPT_TEMPLATE_PATH = "src/prompts/stage1_prompt_template.txt"
-
-    # Путь к файлу со списком групп ОКПД2 (будет создан пользователем)
-    OKPD2_GROUPS_PATH = "src/data/okpd2_5digit_groups.txt"
+    # Путь к файлу со списком групп ОКПД2 (сокращенный)
+    OKPD2_GROUPS_PATH = "src/data/okpd2_5digit_groups_optimized.txt"
 
     def __init__(self):
-        self._prompt_template = None
         self._okpd2_groups = None
+        self._cached_content = None
         self._load_resources()
 
     def _load_resources(self):
-        """Загрузить шаблон промпта и список групп ОКПД2"""
-        # Загружаем шаблон промпта
-        try:
-            with open(self.PROMPT_TEMPLATE_PATH, 'r', encoding='utf-8') as f:
-                self._prompt_template = f.read()
-            logger.info(f"Loaded prompt template from {self.PROMPT_TEMPLATE_PATH}")
-        except Exception as e:
-            logger.error(f"Failed to load prompt template: {e}")
-            # Используем встроенный шаблон как fallback
-            self._prompt_template = self._get_fallback_template()
-
-        # Загружаем список групп ОКПД2
+        """Загрузить список групп ОКПД2"""
         try:
             if os.path.exists(self.OKPD2_GROUPS_PATH):
                 with open(self.OKPD2_GROUPS_PATH, 'r', encoding='utf-8') as f:
                     self._okpd2_groups = f.read()
                 logger.info(f"Loaded OKPD2 groups from {self.OKPD2_GROUPS_PATH}")
+
+                # Проверяем размер
+                groups_size = len(self._okpd2_groups)
+                logger.info(f"OKPD2 groups size: {groups_size:,} characters")
+
+                if groups_size > 130000:
+                    logger.warning(
+                        f"OKPD2 groups file is too large ({groups_size} chars). Please optimize to ~130k chars")
             else:
-                logger.warning(f"OKPD2 groups file not found at {self.OKPD2_GROUPS_PATH}")
-                logger.warning("Please create this file with format: XX.XX.X - Group Name")
-                self._okpd2_groups = "# PLACEHOLDER: Please add OKPD2 5-digit groups here"
+                logger.error(f"OKPD2 groups file not found at {self.OKPD2_GROUPS_PATH}")
+                logger.error("Please create optimized file with ~130k characters (40k tokens)")
+                self._okpd2_groups = "# ERROR: OKPD2 groups file not found"
         except Exception as e:
             logger.error(f"Failed to load OKPD2 groups: {e}")
             self._okpd2_groups = "# ERROR loading OKPD2 groups"
 
-    def _get_fallback_template(self) -> str:
-        """Встроенный шаблон промпта как fallback"""
-        return """ЗАДАЧА: Определить ТОП-5 НАИБОЛЕЕ ПОДХОДЯЩИХ групп ОКПД2 для каждого товара (первые 5 цифр кода в формате XX.XX.X).
+    def get_cached_content(self) -> str:
+        """Получить кэшируемую часть промпта"""
+        if not self._cached_content:
+            self._cached_content = f"""ЗАДАЧА: Определить ТОП-5 НАИБОЛЕЕ ПОДХОДЯЩИХ групп ОКПД2 для каждого товара (первые 5 цифр кода в формате XX.XX.X).
 
 ИНСТРУКЦИИ:
 1. Для каждого товара определите от 1 до 5 НАИБОЛЕЕ ПОДХОДЯЩИХ групп (XX.XX.X)
-2. Расположите группы В ПОРЯДКЕ УБЫВАНИЯ РЕЛЕВАНТНОСТИ
-3. Возвращайте в формате: "Название товара|XX.XX.X|YY.YY.Y|ZZ.ZZ.Z"
+2. Расположите группы В ПОРЯДКЕ УБЫВАНИЯ РЕЛЕВАНТНОСТИ (первая - самая подходящая)
+3. Возвращайте в формате: "Название товара|XX.XX.X|YY.YY.Y|ZZ.ZZ.Z" (максимум 5 групп)
 4. Если товар НЕ подходит НИ ПОД ОДНУ группу - НЕ выводите его
 5. НЕ добавляйте пояснения или комментарии
-6. Лучше выбрать больше категорий, чем меньше!
+6. Старайтесь включить все потенциально подходящие группы (до 5 штук)
+7. Используйте ТОЛЬКО коды из предоставленного списка ОКПД2
+
+ПРАВИЛА ВЫБОРА ТОП-5:
+- Первая группа - наиболее точно описывающая товар
+- Следующие группы - альтернативные варианты классификации
+- Учитывайте различные аспекты товара (материал, назначение, сфера применения)
+- Если товар явно подходит только под 1-2 группы - укажите только их
+- НЕ добавляйте группы "для количества" - только реально подходящие
 
 ФОРМАТ ВЫВОДА:
 Название товара|XX.XX.X
 Название товара|XX.XX.X|YY.YY.Y
+Название товара|XX.XX.X|YY.YY.Y|ZZ.ZZ.Z|AA.AA.A|BB.BB.B
 
-ГРУППЫ ОКПД2:
-{OKPD2_GROUPS_PLACEHOLDER}
+ПРИМЕРЫ:
+Хлеб пшеничный|10.71.1
+Ноутбук HP|26.20.1|26.20.3|26.20.2
+Услуги по ремонту компьютеров|95.11.1|33.12.1|62.09.1
+Кабель электрический|27.32.1|25.93.1|27.90.3
+Принтер с функцией сканера|26.20.4|28.23.2|26.20.3|26.30.1
+Стол офисный деревянный|31.01.1|31.09.1|25.99.2
+Программное обеспечение|58.29.1|58.29.2|58.29.3|58.29.4|62.01.1
+Услуги IT-консалтинга|62.02.1|62.02.2|62.09.2|70.22.1|62.03.1
+Молоко пастеризованное|10.51.1|10.51.5|10.51.2
+Журнал бухгалтерский|17.23.1|58.14.1|17.12.1
+Услуги грузоперевозок|49.41.1|49.41.2|52.29.1|52.24.1
 
-СПИСОК ТОВАРОВ:
-{PRODUCTS_LIST}"""
+ГРУППЫ ОКПД2 (5 ЦИФР):
+{self._okpd2_groups}"""
 
-    def build_stage_one_prompt(self, products: List[str]) -> str:
-        """Построить промпт для первого этапа с топ-5 группами"""
-        products_text = "\n".join(products)
+        return self._cached_content
 
-        # Заменяем плейсхолдеры в шаблоне
-        prompt = self._prompt_template.replace(
-            "{OKPD2_GROUPS_PLACEHOLDER}",
-            self._okpd2_groups
-        ).replace(
-            "{PRODUCTS_LIST}",
-            products_text
-        )
-
-        return prompt
+    def build_products_prompt(self, products: List[str]) -> str:
+        """Построить промпт только с товарами (динамическая часть)"""
+        return f"\nСПИСОК ТОВАРОВ:\n" + "\n".join(products)
 
     @staticmethod
     def parse_classification_response(response: str, product_map: Dict[str, str]) -> Dict[str, List[str]]:
-        """
-        Парсинг ответа от AI с поддержкой топ-5 групп ОКПД2
-
-        Args:
-            response: Ответ от AI
-            product_map: Маппинг {название товара: id товара}
-
-        Returns:
-            Dict с результатами {product_id: [группы в порядке убывания релевантности]}
-        """
+        """Парсинг ответа от AI с поддержкой топ-5 групп ОКПД2"""
         results = {}
 
-        # Регулярное выражение для 5-значных кодов ОКПД2 (XX.XX.X)
+        # Регулярное выражение для 5-значных кодов ОКПД2
         okpd2_pattern = re.compile(r'^\d{2}\.\d{2}\.\d$')
 
         for line in response.strip().split('\n'):

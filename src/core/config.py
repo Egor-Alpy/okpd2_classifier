@@ -30,7 +30,12 @@ class Settings(BaseSettings):
 
     # Anthropic
     anthropic_api_key: str
-    anthropic_model: str = "claude-3-haiku-20240307"  # Используем более быструю модель
+    # Используем Claude 3.7 Sonnet для prompt caching без учета в ITPM
+    anthropic_model: str = "claude-3-7-sonnet-20250105"
+
+    # Prompt caching
+    enable_prompt_caching: bool = True
+    cache_ttl_minutes: int = 5
 
     # Proxy settings for Anthropic API
     http_proxy: Optional[str] = None
@@ -39,12 +44,13 @@ class Settings(BaseSettings):
 
     # Processing
     migration_batch_size: int = 1000
-    classification_batch_size: int = 10  # Уменьшено для избежания rate limit
-    max_workers: int = 1  # Уменьшено количество воркеров
+    # Увеличиваем размер батча для эффективного использования кэша
+    classification_batch_size: int = 300
+    max_workers: int = 1
 
     # Rate limit settings
-    rate_limit_delay: int = 10  # Задержка между батчами в секундах
-    max_retries: int = 3  # Количество попыток при rate limit
+    rate_limit_delay: int = 5  # Уменьшаем задержку
+    max_retries: int = 3
 
     # API
     api_key: str
@@ -58,7 +64,6 @@ class Settings(BaseSettings):
                 f"{self.source_mongo_host}:{self.source_mongo_port}"
             )
 
-            # Добавляем authSource если указан
             if self.source_mongo_authsource:
                 connection_string += f"/{self.source_mongo_authsource}"
                 connection_string += f"?authMechanism={self.source_mongo_authmechanism}"
@@ -72,14 +77,12 @@ class Settings(BaseSettings):
     @property
     def target_mongodb_connection_string(self) -> str:
         """Формирование строки подключения для Target MongoDB"""
-        # Простое подключение без аутентификации
         connection_string = f"mongodb://{self.target_mongo_host}:{self.target_mongo_port}"
         return connection_string
 
     @property
     def proxy_url(self) -> Optional[str]:
         """Получить URL прокси для Anthropic API"""
-        # Приоритет: SOCKS -> HTTPS -> HTTP
         if self.socks_proxy:
             return self.socks_proxy
         elif self.https_proxy:

@@ -15,13 +15,13 @@ logger = logging.getLogger(__name__)
 
 
 class StageOneClassifier:
-    """Классификатор первого этапа"""
+    """Классификатор первого этапа с поддержкой prompt caching"""
 
     def __init__(
             self,
             ai_client: AnthropicClient,
             target_store: TargetMongoStore,
-            batch_size: int = 50,
+            batch_size: int = 300,
             worker_id: str = None
     ):
         self.ai_client = ai_client
@@ -30,18 +30,24 @@ class StageOneClassifier:
         self.worker_id = worker_id or f"worker_{uuid.uuid4().hex[:8]}"
         self.prompt_builder = PromptBuilder()
 
+        # Получаем кэшируемый контент один раз
+        self.cached_content = self.prompt_builder.get_cached_content()
+        logger.info(f"Cached content size: {len(self.cached_content):,} characters")
+
         # Rate limit settings
-        self.rate_limit_delay = int(os.getenv("RATE_LIMIT_DELAY", "10"))
+        self.rate_limit_delay = int(os.getenv("RATE_LIMIT_DELAY", "5"))
         self.max_retries = int(os.getenv("MAX_RETRIES", "3"))
+
+        # Cache refresh
+        self.last_cache_refresh = time.time()
+        self.cache_refresh_interval = 240  # 4 минуты
 
         logger.info(f"Classifier initialized with batch_size={batch_size}, "
                     f"rate_limit_delay={self.rate_limit_delay}s, "
                     f"max_retries={self.max_retries}")
 
     async def process_batch(self, products: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """
-        Обработать батч товаров
-        """
+        """Обработать батч товаров с использованием кэша"""
         if not products:
             logger.warning("Empty products list provided")
             return {
@@ -58,6 +64,9 @@ class StageOneClassifier:
         start_time = time.time()
         product_ids = [p["_id"] for p in products]
 
+        # Проверяем необходимость обновления кэша
+        await self._refresh_cache_if_needed()
+
         retry_count = 0
         while retry_count < self.max_retries:
             try:
@@ -71,11 +80,14 @@ class StageOneClassifier:
                     product_map[product_name] = product_id
                     product_names.append(product_name)
 
-                # Формируем промпт
-                prompt = self.prompt_builder.build_stage_one_prompt(product_names)
+                # Формируем только динамическую часть промпта
+                dynamic_prompt = self.prompt_builder.build_products_prompt(product_names)
 
-                # Отправляем запрос к AI
-                response = await self.ai_client.classify_batch(prompt)
+                # Отправляем запрос с кэшированным контентом
+                response = await self.ai_client.classify_batch(
+                    prompt=dynamic_prompt,
+                    cached_content=self.cached_content
+                )
 
                 # Парсим результаты
                 results = self.prompt_builder.parse_classification_response(response, product_map)
@@ -147,6 +159,24 @@ class StageOneClassifier:
                 await self._mark_products_failed(product_ids)
                 raise
 
+    async def _refresh_cache_if_needed(self):
+        """Обновить кэш если прошло больше 4 минут"""
+        current_time = time.time()
+        if current_time - self.last_cache_refresh > self.cache_refresh_interval:
+            logger.info("Refreshing cache to prevent expiration")
+
+            # Отправляем пустой запрос для обновления кэша
+            try:
+                await self.ai_client.classify_batch(
+                    prompt="Тестовый товар",
+                    cached_content=self.cached_content,
+                    max_tokens=10
+                )
+                self.last_cache_refresh = current_time
+                logger.info("Cache refreshed successfully")
+            except Exception as e:
+                logger.warning(f"Failed to refresh cache: {e}")
+
     async def _update_products_with_results(
             self,
             products: List[Dict[str, Any]],
@@ -198,6 +228,7 @@ class StageOneClassifier:
     async def run_continuous_classification(self):
         """Запустить непрерывную классификацию"""
         logger.info(f"Starting continuous classification for worker {self.worker_id}...")
+        logger.info(f"Using prompt caching with Claude 3.7 Sonnet")
 
         while True:
             try:
@@ -210,6 +241,9 @@ class StageOneClassifier:
                 if not products:
                     logger.info(f"Worker {self.worker_id}: No pending products, waiting...")
                     await asyncio.sleep(10)
+
+                    # Обновляем кэш даже во время простоя
+                    await self._refresh_cache_if_needed()
                     continue
 
                 logger.info(f"Worker {self.worker_id}: Got {len(products)} products to process")

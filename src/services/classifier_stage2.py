@@ -17,13 +17,13 @@ logger = logging.getLogger(__name__)
 
 
 class StageTwoClassifier:
-    """Классификатор второго этапа для точных кодов ОКПД2"""
+    """Классификатор второго этапа с кэшированием по классам"""
 
     def __init__(
             self,
             ai_client: AnthropicClient,
             target_store: TargetMongoStore,
-            batch_size: int = 15,  # Меньше, т.к. промпт будет больше
+            batch_size: int = 50,
             worker_id: str = None
     ):
         self.ai_client = ai_client
@@ -33,14 +33,18 @@ class StageTwoClassifier:
         self.prompt_builder = PromptBuilderStage2()
 
         # Rate limit settings
-        self.rate_limit_delay = int(os.getenv("RATE_LIMIT_DELAY", "10"))
+        self.rate_limit_delay = int(os.getenv("RATE_LIMIT_DELAY", "5"))
         self.max_retries = int(os.getenv("MAX_RETRIES", "3"))
+
+        # Cache refresh tracking
+        self.last_cache_refresh = {}  # По классам
+        self.cache_refresh_interval = 240  # 4 минуты
 
         logger.info(f"Stage 2 Classifier initialized with batch_size={batch_size}, "
                     f"rate_limit_delay={self.rate_limit_delay}s")
 
     async def process_batch(self, products: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """Обработать батч товаров второго этапа"""
+        """Обработать батч товаров второго этапа с кэшированием"""
         if not products:
             return {
                 "batch_id": "",
@@ -56,79 +60,142 @@ class StageTwoClassifier:
         start_time = time.time()
         product_ids = [p["_id"] for p in products]
 
-        retry_count = 0
-        while retry_count < self.max_retries:
+        # Группируем товары по основным классам для оптимального кэширования
+        products_by_class = self._group_products_by_class(products)
+
+        all_results = {}
+
+        for class_code, class_products in products_by_class.items():
+            logger.info(f"Processing {len(class_products)} products for class {class_code}")
+
+            # Обновляем кэш для класса при необходимости
+            await self._refresh_class_cache_if_needed(class_code)
+
+            retry_count = 0
+            while retry_count < self.max_retries:
+                try:
+                    # Готовим данные для промпта
+                    product_map = {}
+                    for product in class_products:
+                        product_id = product["_id"]
+                        product_name = product["title"]
+                        product_map[product_name] = product_id
+
+                    # Получаем кэшированный контент для групп товаров
+                    # Берем группы первого товара (они должны быть из одного класса)
+                    sample_groups = class_products[0].get("okpd_group", [])
+                    cached_content = self.prompt_builder.get_cached_content_for_groups(sample_groups)
+
+                    if not cached_content:
+                        logger.warning(f"No cached content for class {class_code}, skipping")
+                        break
+
+                    # Формируем динамическую часть
+                    dynamic_prompt = self.prompt_builder.build_products_prompt_stage2(class_products)
+
+                    # Отправляем запрос к AI с кэшированием
+                    response = await self.ai_client.classify_batch(
+                        prompt=dynamic_prompt,
+                        cached_content=cached_content,
+                        max_tokens=4000
+                    )
+
+                    # Парсим результаты
+                    results = self.prompt_builder.parse_stage2_response(response, product_map)
+                    all_results.update(results)
+
+                    break  # Успешно обработали
+
+                except Exception as e:
+                    error_str = str(e)
+
+                    # Проверяем rate limit
+                    if "429" in error_str or "rate_limit_error" in error_str:
+                        await metrics_collector.record_rate_limit(self.worker_id)
+                        retry_count += 1
+
+                        if retry_count < self.max_retries:
+                            wait_time = 30 * (2 ** (retry_count - 1))
+                            logger.warning(
+                                f"Rate limit hit for class {class_code}. "
+                                f"Retry {retry_count}/{self.max_retries} after {wait_time}s delay."
+                            )
+                            await asyncio.sleep(wait_time)
+                            continue
+
+                    logger.error(f"Error processing class {class_code}: {e}")
+                    break
+
+        # Обновляем товары с результатами
+        await self._update_products_with_results(products, all_results)
+
+        # Статистика
+        classified_count = len(all_results)
+        none_classified_count = len(products) - classified_count
+
+        logger.info(
+            f"Stage 2 batch {batch_id} completed: "
+            f"{classified_count} classified, {none_classified_count} not classified"
+        )
+
+        # Записываем метрику
+        processing_time = time.time() - start_time
+        metric = ClassificationMetrics(
+            timestamp=datetime.utcnow(),
+            worker_id=self.worker_id,
+            batch_size=len(products),
+            processing_time=processing_time,
+            success_count=classified_count,
+            failure_count=none_classified_count
+        )
+        await metrics_collector.record_classification(metric)
+
+        return {
+            "batch_id": batch_id,
+            "total": len(products),
+            "classified": classified_count,
+            "none_classified": none_classified_count,
+            "results": all_results
+        }
+
+    def _group_products_by_class(self, products: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
+        """Группировать товары по основному классу ОКПД2"""
+        products_by_class = {}
+
+        for product in products:
+            okpd_groups = product.get("okpd_group", [])
+            if okpd_groups:
+                # Берем класс из первой группы
+                main_class = okpd_groups[0][:2]
+
+                if main_class not in products_by_class:
+                    products_by_class[main_class] = []
+
+                products_by_class[main_class].append(product)
+
+        return products_by_class
+
+    async def _refresh_class_cache_if_needed(self, class_code: str):
+        """Обновить кэш класса если необходимо"""
+        current_time = time.time()
+        last_refresh = self.last_cache_refresh.get(class_code, 0)
+
+        if current_time - last_refresh > self.cache_refresh_interval:
+            logger.info(f"Refreshing cache for class {class_code}")
+
+            # Отправляем минимальный запрос для обновления кэша
             try:
-                # Готовим данные для промпта
-                product_map = {}
-                for product in products:
-                    product_id = product["_id"]
-                    product_name = product["title"]
-                    product_map[product_name] = product_id
-
-                # Формируем промпт со всеми группами всех товаров
-                prompt = self.prompt_builder.build_stage_two_prompt(products)
-
-                # Отправляем запрос к AI
-                response = await self.ai_client.classify_batch(prompt, max_tokens=4000)
-
-                # Парсим результаты
-                results = self.prompt_builder.parse_stage2_response(response, product_map)
-
-                # Обновляем товары с результатами
-                await self._update_products_with_results(products, results)
-
-                # Статистика
-                classified_count = len(results)
-                none_classified_count = len(products) - classified_count
-
-                logger.info(
-                    f"Stage 2 batch {batch_id} completed: "
-                    f"{classified_count} classified, {none_classified_count} not classified"
-                )
-
-                # Записываем метрику
-                processing_time = time.time() - start_time
-                metric = ClassificationMetrics(
-                    timestamp=datetime.utcnow(),
-                    worker_id=self.worker_id,
-                    batch_size=len(products),
-                    processing_time=processing_time,
-                    success_count=classified_count,
-                    failure_count=none_classified_count
-                )
-                await metrics_collector.record_classification(metric)
-
-                return {
-                    "batch_id": batch_id,
-                    "total": len(products),
-                    "classified": classified_count,
-                    "none_classified": none_classified_count,
-                    "results": results
-                }
-
+                cached_content = self.prompt_builder._class_caches.get(class_code)
+                if cached_content:
+                    await self.ai_client.classify_batch(
+                        prompt="Тестовый товар",
+                        cached_content=cached_content,
+                        max_tokens=10
+                    )
+                    self.last_cache_refresh[class_code] = current_time
+                    logger.info(f"Cache for class {class_code} refreshed")
             except Exception as e:
-                error_str = str(e)
-
-                # Проверяем rate limit
-                if "429" in error_str or "rate_limit_error" in error_str:
-                    await metrics_collector.record_rate_limit(self.worker_id)
-                    retry_count += 1
-
-                    if retry_count < self.max_retries:
-                        wait_time = 30 * (2 ** (retry_count - 1))
-                        logger.warning(
-                            f"Rate limit hit for stage 2 batch {batch_id}. "
-                            f"Retry {retry_count}/{self.max_retries} after {wait_time}s delay."
-                        )
-                        await asyncio.sleep(wait_time)
-                        continue
-
-                logger.error(f"Error processing stage 2 batch {batch_id}: {e}")
-
-                # Помечаем все товары как failed
-                await self._mark_products_failed(product_ids)
-                raise
+                logger.warning(f"Failed to refresh cache for class {class_code}: {e}")
 
     async def _update_products_with_results(
             self,
@@ -230,6 +297,7 @@ class StageTwoClassifier:
     async def run_continuous_classification(self):
         """Запустить непрерывную классификацию второго этапа"""
         logger.info(f"Starting continuous stage 2 classification for worker {self.worker_id}")
+        logger.info("Using per-class caching for optimal performance")
 
         while True:
             try:
