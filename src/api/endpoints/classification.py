@@ -118,6 +118,29 @@ async def resume_migration(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/stats")
+async def get_statistics(
+        target_store=Depends(get_target_store),
+        api_key: str = Depends(verify_api_key)
+):
+    """Получить статистику классификации"""
+    stats = await target_store.get_statistics()
+
+    # Добавляем процентные показатели
+    if stats["total"] > 0:
+        stats["classified_percentage"] = round(stats["classified"] / stats["total"] * 100, 2)
+        stats["pending_percentage"] = round(stats["pending"] / stats["total"] * 100, 2)
+        stats["none_classified_percentage"] = round(stats["none_classified"] / stats["total"] * 100, 2)
+        stats["failed_percentage"] = round(stats["failed"] / stats["total"] * 100, 2)
+    else:
+        stats["classified_percentage"] = 0
+        stats["pending_percentage"] = 0
+        stats["none_classified_percentage"] = 0
+        stats["failed_percentage"] = 0
+
+    return stats
+
+
 @router.get("/stats/by-group")
 async def get_stats_by_group(
         target_store=Depends(get_target_store),
@@ -182,4 +205,21 @@ async def reset_failed_products(
     return {
         "reset_count": result.modified_count,
         "message": f"Reset {result.modified_count} failed products to pending"
+    }
+
+
+@router.post("/cleanup-stuck")
+async def cleanup_stuck_products(
+        target_store=Depends(get_target_store),
+        api_key: str = Depends(verify_api_key)
+):
+    """Сбросить застрявшие в processing товары обратно в pending"""
+    result = await target_store.products.update_many(
+        {"status_stg1": ProductStatus.PROCESSING.value},
+        {"$set": {"status_stg1": ProductStatus.PENDING.value}}
+    )
+
+    return {
+        "cleaned_count": result.modified_count,
+        "message": f"Reset {result.modified_count} stuck products to pending"
     }

@@ -8,7 +8,6 @@ from datetime import datetime
 from src.storage.source_mongo import SourceMongoStore
 from src.storage.target_mongo import TargetMongoStore
 from src.core.config import settings
-from src.core.metrics import metrics_collector, MigrationMetrics
 
 logger = logging.getLogger(__name__)
 
@@ -76,18 +75,14 @@ class ProductMigrator:
                     self.source_store.collection_name
                 )
 
-                # Записываем метрику миграции
+                # Логирование
                 batch_processing_time = time.time() - batch_start_time
                 duplicates = len(products) - inserted
 
-                metric = MigrationMetrics(
-                    timestamp=datetime.utcnow(),
-                    batch_size=len(products),
-                    processing_time=batch_processing_time,
-                    inserted_count=inserted,
-                    duplicate_count=duplicates
+                logger.info(
+                    f"Batch processed: {inserted} inserted, {duplicates} duplicates, "
+                    f"time: {batch_processing_time:.2f}s"
                 )
-                await metrics_collector.record_migration(metric)
 
                 migrated_count += inserted
 

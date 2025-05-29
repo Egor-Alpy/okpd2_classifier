@@ -11,7 +11,6 @@ from src.services.ai_client_stage2 import PromptBuilderStage2
 from src.storage.target_mongo import TargetMongoStore
 from src.models.domain import ProductStatus
 from src.models.domain_stage2 import ProductStatusStage2
-from src.core.metrics import metrics_collector, ClassificationMetrics
 
 logger = logging.getLogger(__name__)
 
@@ -111,7 +110,6 @@ class StageTwoClassifier:
 
                     # Проверяем rate limit
                     if "429" in error_str or "rate_limit_error" in error_str:
-                        await metrics_collector.record_rate_limit(self.worker_id)
                         retry_count += 1
 
                         if retry_count < self.max_retries:
@@ -138,17 +136,8 @@ class StageTwoClassifier:
             f"{classified_count} classified, {none_classified_count} not classified"
         )
 
-        # Записываем метрику
         processing_time = time.time() - start_time
-        metric = ClassificationMetrics(
-            timestamp=datetime.utcnow(),
-            worker_id=self.worker_id,
-            batch_size=len(products),
-            processing_time=processing_time,
-            success_count=classified_count,
-            failure_count=none_classified_count
-        )
-        await metrics_collector.record_classification(metric)
+        logger.info(f"Batch processing time: {processing_time:.2f}s")
 
         return {
             "batch_id": batch_id,
