@@ -45,11 +45,11 @@ class Settings(BaseSettings):
     # Processing
     migration_batch_size: int = 1000
     # Увеличиваем размер батча для эффективного использования кэша
-    classification_batch_size: int = 300
+    classification_batch_size: int = 250
     max_workers: int = 1
 
     # Rate limit settings
-    rate_limit_delay: int = 5  # Уменьшаем задержку
+    rate_limit_delay: int = 60  # Уменьшаем задержку
     max_retries: int = 3
 
     # API

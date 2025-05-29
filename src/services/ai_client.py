@@ -23,17 +23,28 @@ class AnthropicClient:
         if self.client is None:
             if self.proxy_url:
                 logger.info(f"Using proxy for Anthropic API: {self.proxy_url}")
+                # УВЕЛИЧИВАЕМ ТАЙМАУТЫ для больших запросов
                 self._http_client = httpx.AsyncClient(
                     proxy=self.proxy_url,
-                    timeout=httpx.Timeout(30.0, connect=10.0)
+                    timeout=httpx.Timeout(
+                        timeout=300.0,      # Общий таймаут 5 минут
+                        connect=30.0,       # Таймаут подключения 30 секунд
+                        read=300.0,         # Таймаут чтения 5 минут
+                        write=30.0          # Таймаут записи 30 секунд
+                    )
                 )
                 self.client = AsyncAnthropic(
                     api_key=self.api_key,
-                    http_client=self._http_client
+                    http_client=self._http_client,
+                    # Также увеличиваем таймаут в самом клиенте
+                    timeout=300.0
                 )
             else:
                 logger.info("No proxy configured for Anthropic API")
-                self.client = AsyncAnthropic(api_key=self.api_key)
+                self.client = AsyncAnthropic(
+                    api_key=self.api_key,
+                    timeout=300.0  # Увеличиваем таймаут
+                )
 
     async def classify_batch(self, prompt: str, cached_content: str = None, max_tokens: int = 4000) -> str:
         """Отправить запрос на классификацию с поддержкой кэширования"""
@@ -66,6 +77,10 @@ class AnthropicClient:
                 messages = [{"role": "user", "content": prompt}]
                 extra_headers = None
 
+            # Логируем размер запроса
+            total_content_size = len(str(messages))
+            logger.info(f"Sending request with total content size: {total_content_size:,} chars")
+
             response = await self.client.messages.create(
                 model=self.model,
                 max_tokens=max_tokens,
@@ -85,6 +100,10 @@ class AnthropicClient:
 
             return response.content[0].text
 
+        except httpx.TimeoutException as e:
+            logger.error(f"Timeout error when calling Anthropic API: {e}")
+            logger.error("Request took too long. Consider reducing batch size.")
+            raise
         except httpx.ProxyError as e:
             logger.error(f"Proxy error when calling Anthropic API: {e}")
             logger.error(f"Please check your proxy settings: {self.proxy_url}")
@@ -146,41 +165,39 @@ class PromptBuilder:
     def get_cached_content(self) -> str:
         """Получить кэшируемую часть промпта"""
         if not self._cached_content:
-            self._cached_content = f"""ЗАДАЧА: Определить ТОП-5 НАИБОЛЕЕ ПОДХОДЯЩИХ групп ОКПД2 для каждого товара (первые 5 цифр кода в формате XX.XX.X).
+            self._cached_content = f"""ЗАДАЧА: Определить ТОП-2 НАИБОЛЕЕ ПОДХОДЯЩИЕ группы ОКПД2 для каждого товара (первые 5 цифр кода в формате XX.XX.X).
 
 ИНСТРУКЦИИ:
-1. Для каждого товара определите от 1 до 5 НАИБОЛЕЕ ПОДХОДЯЩИХ групп (XX.XX.X)
+1. Для каждого товара определите 1 или 2 НАИБОЛЕЕ ПОДХОДЯЩИЕ группы (XX.XX.X)
 2. Расположите группы В ПОРЯДКЕ УБЫВАНИЯ РЕЛЕВАНТНОСТИ (первая - самая подходящая)
-3. Возвращайте в формате: "Название товара|XX.XX.X|YY.YY.Y|ZZ.ZZ.Z" (максимум 5 групп)
+3. Возвращайте в формате: "Название товара|XX.XX.X" или "Название товара|XX.XX.X|YY.YY.Y" (максимум 2 группы)
 4. Если товар НЕ подходит НИ ПОД ОДНУ группу - НЕ выводите его
 5. НЕ добавляйте пояснения или комментарии
-6. Старайтесь включить все потенциально подходящие группы (до 5 штук)
+6. Выбирайте только САМЫЕ ТОЧНЫЕ и подходящие группы (не более 2)
 7. Используйте ТОЛЬКО коды из предоставленного списка ОКПД2
 
-ПРАВИЛА ВЫБОРА ТОП-5:
-- Первая группа - наиболее точно описывающая товар
-- Следующие группы - альтернативные варианты классификации
-- Учитывайте различные аспекты товара (материал, назначение, сфера применения)
-- Если товар явно подходит только под 1-2 группы - укажите только их
-- НЕ добавляйте группы "для количества" - только реально подходящие
+ПРАВИЛА ВЫБОРА ТОП-2:
+- Первая группа - НАИБОЛЕЕ точно описывающая товар
+- Вторая группа - только если товар явно подходит под две категории
+- НЕ добавляйте вторую группу "для количества"
+- Лучше одна точная группа, чем две неточные
 
 ФОРМАТ ВЫВОДА:
 Название товара|XX.XX.X
 Название товара|XX.XX.X|YY.YY.Y
-Название товара|XX.XX.X|YY.YY.Y|ZZ.ZZ.Z|AA.AA.A|BB.BB.B
 
 ПРИМЕРЫ:
 Хлеб пшеничный|10.71.1
-Ноутбук HP|26.20.1|26.20.3|26.20.2
-Услуги по ремонту компьютеров|95.11.1|33.12.1|62.09.1
-Кабель электрический|27.32.1|25.93.1|27.90.3
-Принтер с функцией сканера|26.20.4|28.23.2|26.20.3|26.30.1
-Стол офисный деревянный|31.01.1|31.09.1|25.99.2
-Программное обеспечение|58.29.1|58.29.2|58.29.3|58.29.4|62.01.1
-Услуги IT-консалтинга|62.02.1|62.02.2|62.09.2|70.22.1|62.03.1
-Молоко пастеризованное|10.51.1|10.51.5|10.51.2
-Журнал бухгалтерский|17.23.1|58.14.1|17.12.1
-Услуги грузоперевозок|49.41.1|49.41.2|52.29.1|52.24.1
+Ноутбук HP|26.20.1
+Услуги по ремонту компьютеров|95.11.1|33.12.1
+Кабель электрический|27.32.1
+Принтер с функцией сканера|26.20.4|26.20.3
+Стол офисный деревянный|31.01.1
+Программное обеспечение|58.29.1|62.01.1
+Услуги IT-консалтинга|62.02.1
+Молоко пастеризованное|10.51.1
+Журнал бухгалтерский|17.23.1
+Услуги грузоперевозок|49.41.1
 
 ГРУППЫ ОКПД2 (5 ЦИФР):
 {self._okpd2_groups}"""

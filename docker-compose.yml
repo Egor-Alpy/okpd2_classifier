@@ -57,8 +57,8 @@ services:
       - WORKER_ID=worker_1
       - REDIS_URL=redis://redis:6379
       # Увеличенный батч для prompt caching
-      - CLASSIFICATION_BATCH_SIZE=300
-      - RATE_LIMIT_DELAY=5
+      - CLASSIFICATION_BATCH_SIZE=75
+      - RATE_LIMIT_DELAY=60
       - MAX_RETRIES=3
       - ENABLE_PROMPT_CACHING=true
       # Прокси настройки (если указаны в .env)

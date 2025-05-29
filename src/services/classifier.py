@@ -127,8 +127,49 @@ class StageOneClassifier:
             except Exception as e:
                 error_str = str(e)
 
+                # Проверяем таймаут
+                if "timeout" in error_str.lower() or "timed out" in error_str.lower():
+                    retry_count += 1
+
+                    if retry_count < self.max_retries:
+                        # Уменьшаем размер батча для следующей попытки
+                        reduced_batch_size = max(1, len(products) // 2)
+                        wait_time = 10 * retry_count
+
+                        logger.warning(
+                            f"Request timeout for batch {batch_id}. "
+                            f"Retry {retry_count}/{self.max_retries} after {wait_time}s delay. "
+                            f"Consider reducing batch size from {len(products)} to {reduced_batch_size}"
+                        )
+
+                        await asyncio.sleep(wait_time)
+
+                        # Если это последняя попытка, обрабатываем меньшими батчами
+                        if retry_count == self.max_retries - 1 and len(products) > 10:
+                            logger.info(f"Splitting batch into smaller parts...")
+                            mid = len(products) // 2
+
+                            # Обрабатываем первую половину
+                            first_half = await self.process_batch(products[:mid])
+
+                            # Обрабатываем вторую половину
+                            second_half = await self.process_batch(products[mid:])
+
+                            # Объединяем результаты
+                            combined_results = {**first_half.get("results", {}), **second_half.get("results", {})}
+
+                            return {
+                                "batch_id": batch_id,
+                                "total": len(products),
+                                "classified": first_half["classified"] + second_half["classified"],
+                                "none_classified": first_half["none_classified"] + second_half["none_classified"],
+                                "results": combined_results
+                            }
+
+                        continue
+
                 # Проверяем rate limit
-                if "429" in error_str or "rate_limit_error" in error_str:
+                elif "429" in error_str or "rate_limit_error" in error_str:
                     await metrics_collector.record_rate_limit(self.worker_id)
                     retry_count += 1
 
@@ -244,9 +285,11 @@ class StageOneClassifier:
         logger.info(f"Using prompt caching with Claude 3.7 Sonnet")
 
         first_batch = True
+        consecutive_timeouts = 0
+        current_batch_size = self.batch_size
 
         while True:
-            batch_size = 1 if first_batch else self.batch_size
+            batch_size = 1 if first_batch else current_batch_size
 
             try:
                 # Получаем pending товары атомарно
@@ -262,6 +305,10 @@ class StageOneClassifier:
 
                     # Обновляем кэш даже во время простоя
                     await self._refresh_cache_if_needed()
+
+                    # Сбрасываем счетчик таймаутов при простое
+                    consecutive_timeouts = 0
+                    current_batch_size = self.batch_size
                     continue
 
                 logger.info(f"Worker {self.worker_id}: Got {len(products)} products to process")
@@ -275,10 +322,39 @@ class StageOneClassifier:
                     f"not classified: {result['none_classified']}"
                 )
 
+                # Успешная обработка - сбрасываем счетчик таймаутов
+                consecutive_timeouts = 0
+
+                # Постепенно увеличиваем размер батча после успешной обработки
+                if current_batch_size < self.batch_size:
+                    current_batch_size = min(current_batch_size * 2, self.batch_size)
+                    logger.info(f"Increasing batch size to {current_batch_size}")
+
                 # Задержка между батчами
                 logger.info(f"Worker {self.worker_id}: Waiting {self.rate_limit_delay}s before next batch...")
                 await asyncio.sleep(self.rate_limit_delay)
 
             except Exception as e:
-                logger.error(f"Error in continuous classification for worker {self.worker_id}: {e}", exc_info=True)
-                await asyncio.sleep(30)
+                error_str = str(e).lower()
+
+                # Особая обработка таймаутов
+                if "timeout" in error_str or "timed out" in error_str:
+                    consecutive_timeouts += 1
+
+                    # Уменьшаем размер батча при частых таймаутах
+                    if consecutive_timeouts >= 2:
+                        current_batch_size = max(10, current_batch_size // 2)
+                        logger.warning(
+                            f"Multiple timeouts detected. Reducing batch size to {current_batch_size}"
+                        )
+
+                    # Увеличиваем задержку при таймаутах
+                    timeout_delay = min(300, 30 * consecutive_timeouts)
+                    logger.error(
+                        f"Timeout error in continuous classification. "
+                        f"Waiting {timeout_delay}s before retry..."
+                    )
+                    await asyncio.sleep(timeout_delay)
+                else:
+                    logger.error(f"Error in continuous classification for worker {self.worker_id}: {e}", exc_info=True)
+                    await asyncio.sleep(30)
