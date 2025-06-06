@@ -112,6 +112,35 @@ class PromptBuilderStage2:
 
         return "\n".join(lines)
 
+        # Добавьте этот метод в класс PromptBuilderStage2 после метода _format_class_codes:
+
+    def _format_multi_class_codes(self, codes_dict: Dict[str, str]) -> str:
+        """Форматировать коды из нескольких классов"""
+        lines = []
+        # Группируем по классам
+        by_class = {}
+        for code, desc in codes_dict.items():
+            class_code = code[:2]
+            if class_code not in by_class:
+                by_class[class_code] = []
+            by_class[class_code].append((code, desc))
+        # Форматируем по классам
+        for class_code in sorted(by_class.keys()):
+            lines.append(f"\n# Класс {class_code}")
+            # Группируем по 5-значным группам внутри класса
+            groups = {}
+            for code, desc in by_class[class_code]:
+                if len(code) >= 7:
+                    group = code[:7]
+                    if group not in groups:
+                        groups[group] = []
+                    groups[group].append((code, desc))
+            for group in sorted(groups.keys()):
+                lines.append(f"\n## Группа {group}")
+                for code, desc in sorted(groups[group]):
+                    lines.append(f"{code} - {desc}")
+        return "\n".join(lines)
+
     def get_cached_content_for_groups(self, okpd_groups: List[str]) -> Optional[str]:
         """Получить объединенный кэшированный контент для списка групп"""
         # Извлекаем уникальные классы из групп

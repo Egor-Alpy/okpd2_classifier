@@ -1,32 +1,25 @@
 from pydantic import BaseModel, Field
 from datetime import datetime
 from typing import Optional, List
-from enum import Enum
 
-
-class ProductStatusStage2(str, Enum):
-    """Статусы второго этапа классификации"""
-    PENDING = "pending"  # Ожидает обработки
-    PROCESSING = "processing"  # В процессе обработки
-    CLASSIFIED = "classified"  # Успешно классифицирован с точным кодом
-    NONE_CLASSIFIED = "none_classified"  # Не удалось найти точный код
-    FAILED = "failed"  # Ошибка при обработке
+# Импортируем ProductStatusStage2 из domain.py
+from src.models.domain import ProductStatusStage2
 
 
 class ProductStageTwo(BaseModel):
     """Модель для второго этапа классификации"""
     # Поля из первого этапа (не изменяем)
-    collection_name: str
-    old_mongo_id: str
+    source_collection: str
+    source_id: str
     title: str
-    okpd_group: List[str]  # 5-значные группы из первого этапа
-    status_stg1: str
+    okpd_groups: List[str]  # 5-значные группы из первого этапа
+    status_stage1: str
     created_at: datetime
 
     # Новые поля для второго этапа
     okpd2_code: Optional[str] = Field(None, description="Точный код ОКПД2")
     okpd2_name: Optional[str] = Field(None, description="Название по ОКПД2")
-    status_stg2: ProductStatusStage2 = Field(
+    status_stage2: ProductStatusStage2 = Field(
         ProductStatusStage2.PENDING,
         description="Статус второго этапа"
     )

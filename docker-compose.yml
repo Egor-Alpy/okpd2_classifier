@@ -1,14 +1,17 @@
 version: '3.8'
 
 services:
-  # Только Redis в контейнере
+  # Redis в контейнере
   redis:
     image: redis:7-alpine
     ports:
       - "6379:6379"
     volumes:
       - redis_data:/data
+    command: redis-server --appendonly yes
+    restart: unless-stopped
 
+  # API сервис
   api:
     build: .
     ports:
@@ -16,87 +19,142 @@ services:
     env_file:
       - .env
     environment:
-      # Используем локальную MongoDB (не меняем настройки)
       - REDIS_URL=redis://redis:6379
-      # Прокси настройки (если указаны в .env)
+      # Прокси настройки из .env
       - HTTP_PROXY=${HTTP_PROXY}
       - HTTPS_PROXY=${HTTPS_PROXY}
       - SOCKS_PROXY=${SOCKS_PROXY}
-      - NO_PROXY=localhost,127.0.0.1,redis
+      - NO_PROXY=localhost,127.0.0.1,redis,host.docker.internal
     depends_on:
       - redis
+    volumes:
+      - ./src/data:/app/src/data:ro  # Монтируем данные ОКПД2
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    command: uvicorn src.main:app --host 0.0.0.0 --port 8000
+    restart: unless-stopped
+    command: uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload
 
+  # Воркер миграции
   migration-worker:
     build: .
     env_file:
       - .env
     environment:
       - REDIS_URL=redis://redis:6379
-      # Прокси настройки (если указаны в .env)
       - HTTP_PROXY=${HTTP_PROXY}
       - HTTPS_PROXY=${HTTPS_PROXY}
       - SOCKS_PROXY=${SOCKS_PROXY}
-      - NO_PROXY=localhost,127.0.0.1,redis
+      - NO_PROXY=localhost,127.0.0.1,redis,host.docker.internal
     depends_on:
       - redis
+    volumes:
+      - ./src/data:/app/src/data:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    # Используем host network mode для доступа к локальной MongoDB
-    network_mode: "host"
+    restart: unless-stopped
     command: python -m src.workers.migration_worker
 
-
-  classification-worker:
+  # Воркер классификации - первый этап
+  classification-worker-1:
     build: .
     env_file:
       - .env
     environment:
       - WORKER_ID=worker_1
       - REDIS_URL=redis://redis:6379
-      # Увеличенный батч для prompt caching
-      - CLASSIFICATION_BATCH_SIZE=75
-      - RATE_LIMIT_DELAY=60
-      - MAX_RETRIES=3
-      - ENABLE_PROMPT_CACHING=true
-      # Прокси настройки (если указаны в .env)
+      - CLASSIFICATION_BATCH_SIZE=${CLASSIFICATION_BATCH_SIZE:-250}
+      - RATE_LIMIT_DELAY=${RATE_LIMIT_DELAY:-6}
+      - MAX_RETRIES=${MAX_RETRIES:-3}
+      - ENABLE_PROMPT_CACHING=${ENABLE_PROMPT_CACHING:-true}
       - HTTP_PROXY=${HTTP_PROXY}
       - HTTPS_PROXY=${HTTPS_PROXY}
       - SOCKS_PROXY=${SOCKS_PROXY}
-      - NO_PROXY=localhost,127.0.0.1,redis
+      - NO_PROXY=localhost,127.0.0.1,redis,host.docker.internal
     depends_on:
       - redis
+    volumes:
+      - ./src/data:/app/src/data:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    # Используем host network mode для доступа к локальной MongoDB
-    network_mode: "host"
+    restart: unless-stopped
     command: python -m src.workers.classification_worker --worker-id worker_1
 
-  classification-worker-stage2:
+  # Второй воркер классификации (опционально)
+  classification-worker-2:
+    build: .
+    env_file:
+      - .env
+    environment:
+      - WORKER_ID=worker_2
+      - REDIS_URL=redis://redis:6379
+      - CLASSIFICATION_BATCH_SIZE=${CLASSIFICATION_BATCH_SIZE:-250}
+      - RATE_LIMIT_DELAY=${RATE_LIMIT_DELAY:-6}
+      - MAX_RETRIES=${MAX_RETRIES:-3}
+      - ENABLE_PROMPT_CACHING=${ENABLE_PROMPT_CACHING:-true}
+      - HTTP_PROXY=${HTTP_PROXY}
+      - HTTPS_PROXY=${HTTPS_PROXY}
+      - SOCKS_PROXY=${SOCKS_PROXY}
+      - NO_PROXY=localhost,127.0.0.1,redis,host.docker.internal
+    depends_on:
+      - redis
+    volumes:
+      - ./src/data:/app/src/data:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    profiles:
+      - multi-worker
+    restart: unless-stopped
+    command: python -m src.workers.classification_worker --worker-id worker_2
+
+  # Воркер второго этапа классификации
+  classification-worker-stage2-1:
     build: .
     env_file:
       - .env
     environment:
       - WORKER_ID=stage2_worker_1
       - REDIS_URL=redis://redis:6379
-      # Меньший батч для второго этапа
-      - CLASSIFICATION_BATCH_SIZE=15
-      - RATE_LIMIT_DELAY=10
-      - MAX_RETRIES=3
-      # Прокси настройки (если указаны в .env)
+      - CLASSIFICATION_BATCH_SIZE=15  # Меньший батч для второго этапа
+      - RATE_LIMIT_DELAY=${RATE_LIMIT_DELAY:-10}
+      - MAX_RETRIES=${MAX_RETRIES:-3}
       - HTTP_PROXY=${HTTP_PROXY}
       - HTTPS_PROXY=${HTTPS_PROXY}
       - SOCKS_PROXY=${SOCKS_PROXY}
-      - NO_PROXY=localhost,127.0.0.1,redis
+      - NO_PROXY=localhost,127.0.0.1,redis,host.docker.internal
     depends_on:
       - redis
+    volumes:
+      - ./src/data:/app/src/data:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    # Используем host network mode для доступа к локальной MongoDB
-    network_mode: "host"
+    restart: unless-stopped
     command: python -m src.workers.classification_worker_stage2 --worker-id stage2_worker_1
+
+  # Второй воркер второго этапа (опционально)
+  classification-worker-stage2-2:
+    build: .
+    env_file:
+      - .env
+    environment:
+      - WORKER_ID=stage2_worker_2
+      - REDIS_URL=redis://redis:6379
+      - CLASSIFICATION_BATCH_SIZE=15
+      - RATE_LIMIT_DELAY=${RATE_LIMIT_DELAY:-10}
+      - MAX_RETRIES=${MAX_RETRIES:-3}
+      - HTTP_PROXY=${HTTP_PROXY}
+      - HTTPS_PROXY=${HTTPS_PROXY}
+      - SOCKS_PROXY=${SOCKS_PROXY}
+      - NO_PROXY=localhost,127.0.0.1,redis,host.docker.internal
+    depends_on:
+      - redis
+    volumes:
+      - ./src/data:/app/src/data:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    profiles:
+      - multi-worker
+    restart: unless-stopped
+    command: python -m src.workers.classification_worker_stage2 --worker-id stage2_worker_2
 
 volumes:
   redis_data:

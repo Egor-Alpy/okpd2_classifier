@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Улучшенный migration worker с автоматическим запуском миграции
+Migration worker для работы со всеми коллекциями
 """
 import asyncio
 import logging
@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 
 class MigrationWorker:
-    """Воркер для миграции товаров"""
+    """Воркер для миграции товаров из всех коллекций"""
 
     def __init__(self):
         self.source_store = None
@@ -72,16 +72,18 @@ class MigrationWorker:
             # Проверяем, есть ли новые товары для миграции
             last_job = completed_jobs[-1]
 
-            # Считаем товары в source
-            source_count = await self.source_store.count_total_products()
+            # Считаем товары во всех коллекциях source
+            source_counts = await self.source_store.count_all_products()
+            source_total = sum(source_counts.values())
 
             # Считаем товары в target
             target_count = await self.target_store.products.count_documents({})
 
-            logger.info(f"Source products: {source_count}, Target products: {target_count}")
+            logger.info(f"Source products (all collections): {source_total}")
+            logger.info(f"Target products: {target_count}")
 
-            if source_count > target_count:
-                logger.info(f"Found {source_count - target_count} new products to migrate")
+            if source_total > target_count:
+                logger.info(f"Found {source_total - target_count} new products to migrate")
                 # Начинаем новую миграцию
                 return await self.migrator.start_migration()
             else:
@@ -92,14 +94,18 @@ class MigrationWorker:
         logger.info("No migration jobs found, starting initial migration...")
 
         # Проверяем, есть ли товары в source
-        source_count = await self.source_store.count_total_products()
-        if source_count == 0:
+        source_counts = await self.source_store.count_all_products()
+        source_total = sum(source_counts.values())
+
+        if source_total == 0:
             logger.error("No products found in source database!")
             logger.error(f"Source database: {settings.source_mongodb_database}")
-            logger.error(f"Source collection: {settings.source_collection_name}")
+            logger.error("Please check if the database contains product collections")
             return None
 
-        logger.info(f"Found {source_count} products in source database")
+        logger.info(f"Found {source_total} products across {len(source_counts)} collections")
+        logger.info(f"Collections: {list(source_counts.keys())}")
+
         return await self.migrator.start_migration()
 
     async def monitor_migration(self, job_id: str):
@@ -142,7 +148,7 @@ class MigrationWorker:
     async def start(self, job_id: Optional[str] = None):
         """Запустить воркер"""
         logger.info("=" * 60)
-        logger.info("Starting Migration Worker")
+        logger.info("Starting Migration Worker (Multi-Collection)")
         logger.info("=" * 60)
 
         try:
@@ -155,14 +161,13 @@ class MigrationWorker:
                 logger.warning(f"Redis not available: {e}")
                 self.redis_client = None
 
-            # Инициализируем source store
+            # Инициализируем source store без указания коллекции
             logger.info("Connecting to source MongoDB...")
             logger.info(f"Database: {settings.source_mongodb_database}")
-            logger.info(f"Collection: {settings.source_collection_name}")
 
             self.source_store = SourceMongoStore(
                 settings.source_mongodb_database,
-                settings.source_collection_name
+                None  # Не указываем коллекцию - будем работать со всеми
             )
 
             # Проверяем подключение к source
@@ -170,16 +175,27 @@ class MigrationWorker:
                 logger.error("Failed to connect to source MongoDB!")
                 return
 
-            # Проверяем количество товаров
-            source_count = await self.source_store.count_total_products()
-            logger.info(f"Source database contains {source_count} products")
+            # Получаем список коллекций
+            collections = await self.source_store.get_collections_list()
+            logger.info(f"Found {len(collections)} product collections: {collections}")
 
-            if source_count == 0:
+            # Проверяем количество товаров
+            source_counts = await self.source_store.count_all_products()
+            total_count = sum(source_counts.values())
+
+            logger.info(f"Total products across all collections: {total_count}")
+            for coll, count in source_counts.items():
+                logger.info(f"  {coll}: {count} products")
+
+            if total_count == 0:
                 logger.error("No products found in source database!")
                 return
 
             # Инициализируем target store
             logger.info("Connecting to target MongoDB...")
+            logger.info(f"Database: {settings.target_mongodb_database}")
+            logger.info(f"Collection: {settings.target_collection_name}")
+
             self.target_store = TargetMongoStore(settings.target_mongodb_database)
 
             # Инициализируем target store (создание индексов)
