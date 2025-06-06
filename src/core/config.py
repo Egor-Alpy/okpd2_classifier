@@ -23,7 +23,7 @@ class Settings(BaseSettings):
     target_mongo_authsource: Optional[str] = None
     target_mongo_authmechanism: str = "SCRAM-SHA-256"
     target_mongo_direct_connection: bool = False
-    target_mongodb_database: str = "okpd_classifier"
+    target_mongodb_database: str = "TenderDB"
 
     # Redis
     redis_url: str = "redis://localhost:6379"

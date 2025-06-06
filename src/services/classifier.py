@@ -224,8 +224,9 @@ class StageOneClassifier:
                 updates.append({
                     "_id": product_id,
                     "data": {
-                        "status_stg1": ProductStatus.CLASSIFIED.value,
-                        "okpd_group": results[product_id]
+                        "status_stage1": ProductStatus.CLASSIFIED.value,
+                        "okpd_groups": results[product_id],
+                        "worker_id": self.worker_id
                     }
                 })
                 logger.debug(f"Product {product_id} classified with groups: {results[product_id]}")
@@ -234,7 +235,8 @@ class StageOneClassifier:
                 updates.append({
                     "_id": product_id,
                     "data": {
-                        "status_stg1": ProductStatus.NONE_CLASSIFIED.value
+                        "status_stage1": ProductStatus.NONE_CLASSIFIED.value,
+                        "worker_id": self.worker_id
                     }
                 })
                 logger.debug(f"Product {product_id} not classified")
@@ -249,7 +251,8 @@ class StageOneClassifier:
             updates.append({
                 "_id": product_id,
                 "data": {
-                    "status_stg1": ProductStatus.FAILED.value
+                    "status_stage1": ProductStatus.FAILED.value,
+                    "worker_id": self.worker_id
                 }
             })
 

@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 
 class TargetMongoStore:
-    """Работа с целевой MongoDB (наша новая БД)"""
+    """Работа с целевой MongoDB"""
 
     def __init__(self, database_name: str, collection_name: str = "products_classifier"):
         connection_string = settings.target_mongodb_connection_string
@@ -25,7 +25,6 @@ class TargetMongoStore:
             connectTimeoutMS=5000
         )
         self.db: AsyncIOMotorDatabase = self.client[database_name]
-        # Используем настраиваемое имя коллекции
         self.products = self.db[collection_name]
         self.migration_jobs = self.db.migration_jobs
         logger.info(f"Using collection: {collection_name}")
@@ -52,15 +51,16 @@ class TargetMongoStore:
         try:
             # Уникальный составной индекс
             await self.products.create_index(
-                [("old_mongo_id", 1), ("collection_name", 1)],
+                [("source_id", 1), ("source_collection", 1)],
                 unique=True
             )
 
             # Индексы для поиска
-            await self.products.create_index("status_stg1")
+            await self.products.create_index("status_stage1")
+            await self.products.create_index("status_stage2")
             await self.products.create_index("created_at")
-            await self.products.create_index("okpd_group")
-            await self.products.create_index("status_stg2")  # Добавлен индекс для второго этапа
+            await self.products.create_index("okpd_groups")
+            await self.products.create_index("okpd2_code")
 
             # Индекс для migration_jobs
             await self.migration_jobs.create_index("job_id", unique=True)
@@ -70,22 +70,24 @@ class TargetMongoStore:
             logger.warning(f"Error creating indexes (may already exist): {e}")
 
     async def insert_products_batch(self, products: List[Dict[str, Any]], collection_name: str) -> int:
-        """
-        Вставить батч товаров в целевую БД
-        Схема: collection_name, old_mongo_id, title, okpd_group, status_stg1, created_at
-        """
+        """Вставить батч товаров в целевую БД"""
         if not products:
             return 0
 
         documents = []
         for product in products:
             doc = {
-                "collection_name": collection_name,
-                "old_mongo_id": product["_id"],
                 "title": product["title"],
-                "okpd_group": None,
-                "status_stg1": ProductStatus.PENDING.value,
-                "created_at": datetime.utcnow()
+                "source_collection": collection_name,
+                "source_id": product["_id"],
+                "created_at": datetime.utcnow(),
+                "okpd_groups": None,
+                "okpd2_code": None,
+                "okpd2_name": None,
+                "status_stage1": ProductStatus.PENDING.value,
+                "status_stage2": None,
+                "processed_at": None,
+                "worker_id": None
             }
             documents.append(doc)
 
@@ -113,7 +115,7 @@ class TargetMongoStore:
     async def get_pending_products(self, limit: int = 50) -> List[Dict[str, Any]]:
         """Получить товары для классификации"""
         cursor = self.products.find(
-            {"status_stg1": ProductStatus.PENDING.value}
+            {"status_stage1": ProductStatus.PENDING.value}
         ).limit(limit)
         return await cursor.to_list(length=limit)
 
@@ -123,8 +125,13 @@ class TargetMongoStore:
 
         for _ in range(limit):
             doc = await self.products.find_one_and_update(
-                {"status_stg1": ProductStatus.PENDING.value},
-                {"$set": {"status_stg1": ProductStatus.PROCESSING.value}},
+                {"status_stage1": ProductStatus.PENDING.value},
+                {
+                    "$set": {
+                        "status_stage1": ProductStatus.PROCESSING.value,
+                        "worker_id": worker_id
+                    }
+                },
                 return_document=True
             )
 
@@ -157,20 +164,22 @@ class TargetMongoStore:
                     logger.error(f"Invalid product_id: {product_id}")
                     continue
 
-                # Обновляем ТОЛЬКО разрешенные поля
+                # Обновляем поля
                 update_data = {}
                 data = update.get("data", {})
 
                 # Поля первого этапа
-                if "status_stg1" in data:
-                    update_data["status_stg1"] = data["status_stg1"]
+                if "status_stage1" in data:
+                    update_data["status_stage1"] = data["status_stage1"]
 
-                if "okpd_group" in data:
-                    update_data["okpd_group"] = data["okpd_group"]
+                if "okpd_groups" in data:
+                    update_data["okpd_groups"] = data["okpd_groups"]
+                    update_data["worker_id"] = data.get("worker_id")
 
                 # Поля второго этапа
-                if "status_stg2" in data:
-                    update_data["status_stg2"] = data["status_stg2"]
+                if "status_stage2" in data:
+                    update_data["status_stage2"] = data["status_stage2"]
+                    update_data["worker_id"] = data.get("worker_id")
 
                 if "okpd2_code" in data:
                     update_data["okpd2_code"] = data["okpd2_code"]
@@ -178,14 +187,9 @@ class TargetMongoStore:
                 if "okpd2_name" in data:
                     update_data["okpd2_name"] = data["okpd2_name"]
 
-                if "stage2_started_at" in data:
-                    update_data["stage2_started_at"] = data["stage2_started_at"]
-
-                if "stage2_completed_at" in data:
-                    update_data["stage2_completed_at"] = data["stage2_completed_at"]
-
-                if "stage2_worker_id" in data:
-                    update_data["stage2_worker_id"] = data["stage2_worker_id"]
+                # Обновляем processed_at при завершении
+                if "status_stage2" in data and data["status_stage2"] in ["classified", "none_classified"]:
+                    update_data["processed_at"] = datetime.utcnow()
 
                 operation = UpdateOne(filter_query, {"$set": update_data})
                 bulk_operations.append(operation)
@@ -205,11 +209,11 @@ class TargetMongoStore:
     async def get_statistics(self) -> Dict[str, int]:
         """Получить статистику по товарам"""
         total = await self.products.count_documents({})
-        pending = await self.products.count_documents({"status_stg1": ProductStatus.PENDING.value})
-        processing = await self.products.count_documents({"status_stg1": ProductStatus.PROCESSING.value})
-        classified = await self.products.count_documents({"status_stg1": ProductStatus.CLASSIFIED.value})
-        none_classified = await self.products.count_documents({"status_stg1": ProductStatus.NONE_CLASSIFIED.value})
-        failed = await self.products.count_documents({"status_stg1": ProductStatus.FAILED.value})
+        pending = await self.products.count_documents({"status_stage1": ProductStatus.PENDING.value})
+        processing = await self.products.count_documents({"status_stage1": ProductStatus.PROCESSING.value})
+        classified = await self.products.count_documents({"status_stage1": ProductStatus.CLASSIFIED.value})
+        none_classified = await self.products.count_documents({"status_stage1": ProductStatus.NONE_CLASSIFIED.value})
+        failed = await self.products.count_documents({"status_stage1": ProductStatus.FAILED.value})
 
         return {
             "total": total,

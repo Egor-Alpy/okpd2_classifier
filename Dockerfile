@@ -15,7 +15,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Копирование кода приложения
 COPY src/ ./src/
-COPY scripts/ ./scripts/
 
 # Создание пользователя
 RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app

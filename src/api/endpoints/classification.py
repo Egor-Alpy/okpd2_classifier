@@ -148,10 +148,10 @@ async def get_stats_by_group(
 ):
     """Получить статистику по группам ОКПД2"""
     pipeline = [
-        {"$match": {"status_stg1": ProductStatus.CLASSIFIED.value}},
-        {"$unwind": "$okpd_group"},
+        {"$match": {"status_stage1": ProductStatus.CLASSIFIED.value}},
+        {"$unwind": "$okpd_groups"},
         {"$group": {
-            "_id": "$okpd_group",
+            "_id": "$okpd_groups",
             "count": {"$sum": 1}
         }},
         {"$sort": {"_id": 1}}
@@ -176,7 +176,7 @@ async def get_sample_products(
     """Получить примеры товаров"""
     query = {}
     if status:
-        query["status_stg1"] = status
+        query["status_stage1"] = status
 
     cursor = target_store.products.find(query).limit(limit)
     products = await cursor.to_list(length=limit)
@@ -198,8 +198,8 @@ async def reset_failed_products(
 ):
     """Сбросить статус failed товаров на pending"""
     result = await target_store.products.update_many(
-        {"status_stg1": ProductStatus.FAILED.value},
-        {"$set": {"status_stg1": ProductStatus.PENDING.value}}
+        {"status_stage1": ProductStatus.FAILED.value},
+        {"$set": {"status_stage1": ProductStatus.PENDING.value}}
     )
 
     return {
@@ -215,8 +215,8 @@ async def cleanup_stuck_products(
 ):
     """Сбросить застрявшие в processing товары обратно в pending"""
     result = await target_store.products.update_many(
-        {"status_stg1": ProductStatus.PROCESSING.value},
-        {"$set": {"status_stg1": ProductStatus.PENDING.value}}
+        {"status_stage1": ProductStatus.PROCESSING.value},
+        {"$set": {"status_stage1": ProductStatus.PENDING.value}}
     )
 
     return {
