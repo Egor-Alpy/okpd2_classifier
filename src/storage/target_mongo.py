@@ -7,6 +7,7 @@ from pymongo import UpdateOne
 from pymongo.errors import BulkWriteError
 from src.core.config import settings
 from src.models.domain import ProductStatus
+from src.models.domain_stage2 import ProductStatusStage2
 
 logger = logging.getLogger(__name__)
 
@@ -137,6 +138,84 @@ class TargetMongoStore:
 
         if products:
             logger.info(f"Locked {len(products)} products for processing")
+
+        return products
+
+    async def get_pending_products_atomic_by_collection(
+            self,
+            limit: int = 50,
+            worker_id: str = None,
+            collection_name: str = None
+    ) -> List[Dict[str, Any]]:
+        """Атомарно получить и заблокировать товары для классификации из конкретной коллекции"""
+        products = []
+
+        query = {"status_stage1": ProductStatus.PENDING.value}
+        if collection_name:
+            query["source_collection"] = collection_name
+
+        for _ in range(limit):
+            doc = await self.products.find_one_and_update(
+                query,
+                {
+                    "$set": {
+                        "status_stage1": ProductStatus.PROCESSING.value,
+                        "worker_id": worker_id
+                    }
+                },
+                return_document=True
+            )
+
+            if doc:
+                products.append(doc)
+            else:
+                break
+
+        if products:
+            logger.info(f"Locked {len(products)} products from collection '{collection_name}' for processing")
+
+        return products
+
+    async def get_pending_stage2_by_collection(
+            self,
+            limit: int = 50,
+            worker_id: str = None,
+            collection_name: str = None
+    ) -> List[Dict[str, Any]]:
+        """Получить батч pending товаров для второго этапа из конкретной коллекции"""
+        products = []
+
+        query = {
+            "status_stage1": ProductStatus.CLASSIFIED.value,
+            "okpd_groups": {"$exists": True, "$ne": []},
+            "$or": [
+                {"status_stage2": {"$exists": False}},
+                {"status_stage2": ProductStatusStage2.PENDING.value}
+            ]
+        }
+
+        if collection_name:
+            query["source_collection"] = collection_name
+
+        for _ in range(limit):
+            doc = await self.products.find_one_and_update(
+                query,
+                {
+                    "$set": {
+                        "status_stage2": ProductStatusStage2.PROCESSING.value,
+                        "worker_id": worker_id
+                    }
+                },
+                return_document=True
+            )
+
+            if doc:
+                products.append(doc)
+            else:
+                break
+
+        if products:
+            logger.info(f"Locked {len(products)} products from collection '{collection_name}' for stage 2 processing")
 
         return products
 

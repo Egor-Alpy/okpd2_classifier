@@ -22,12 +22,15 @@ logger = logging.getLogger(__name__)
 class ClassificationWorker:
     """Воркер для классификации товаров"""
 
-    def __init__(self, worker_id: str = "worker_1"):
+    def __init__(self, worker_id: str = "worker_1", collection_name: str = None):
         self.worker_id = worker_id
+        self.collection_name = collection_name
         self.target_store = None
         self.classifier = None
         self.running = False
         logger.info(f"Initializing classification worker: {self.worker_id}")
+        if collection_name:
+            logger.info(f"Worker will process only collection: {collection_name}")
 
     async def start(self):
         """Запустить воркер"""
@@ -56,7 +59,8 @@ class ClassificationWorker:
                 ai_client,
                 self.target_store,
                 settings.classification_batch_size,
-                worker_id=self.worker_id
+                worker_id=self.worker_id,
+                collection_name=self.collection_name
             )
 
             self.running = True
@@ -92,6 +96,7 @@ async def main():
 
     parser = argparse.ArgumentParser(description='Classification worker')
     parser.add_argument('--worker-id', default='worker_1', help='Worker ID')
+    parser.add_argument('--collection', default=None, help='Process only specific collection')
     parser.add_argument('--log-level', default='INFO',
                         choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'],
                         help='Logging level')
@@ -108,6 +113,7 @@ async def main():
     logger.info("OKPD2 Classification Worker Starting")
     logger.info("=" * 60)
     logger.info(f"Worker ID: {args.worker_id}")
+    logger.info(f"Collection: {args.collection or 'ALL'}")
     logger.info(f"Log Level: {args.log_level}")
     logger.info(f"Batch Size: {settings.classification_batch_size}")
     logger.info(f"Rate Limit Delay: {settings.rate_limit_delay}s")
@@ -115,7 +121,7 @@ async def main():
     logger.info("=" * 60)
 
     try:
-        worker = ClassificationWorker(args.worker_id)
+        worker = ClassificationWorker(args.worker_id, args.collection)
         await worker.start()
     except KeyboardInterrupt:
         logger.info("Shutdown requested by user")
