@@ -82,7 +82,6 @@ class TargetMongoStore:
                 "title": product["title"],
                 "source_collection": collection_name,
                 "source_id": product["_id"],
-                "created_at": datetime.utcnow(),
                 "okpd_groups": None,
                 "okpd2_code": None,
                 "okpd2_name": None,
