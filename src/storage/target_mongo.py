@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 
 class TargetMongoStore:
-    """Работа с целевой MongoDB"""
+    """Работа с целевой MongoDB - обновленная схема"""
 
     def __init__(self, database_name: str, collection_name: str = None):
         connection_string = settings.target_mongodb_connection_string
@@ -72,7 +72,7 @@ class TargetMongoStore:
             logger.warning(f"Error creating indexes (may already exist): {e}")
 
     async def insert_products_batch(self, products: List[Dict[str, Any]], collection_name: str) -> int:
-        """Вставить батч товаров в целевую БД"""
+        """Вставить батч товаров в целевую БД - упрощенная схема"""
         if not products:
             return 0
 
@@ -87,9 +87,7 @@ class TargetMongoStore:
                 "okpd2_code": None,
                 "okpd2_name": None,
                 "status_stage1": ProductStatus.PENDING.value,
-                "status_stage2": None,
-                "processed_at": None,
-                "worker_id": None
+                "status_stage2": None
             }
             documents.append(doc)
 
@@ -128,12 +126,7 @@ class TargetMongoStore:
         for _ in range(limit):
             doc = await self.products.find_one_and_update(
                 {"status_stage1": ProductStatus.PENDING.value},
-                {
-                    "$set": {
-                        "status_stage1": ProductStatus.PROCESSING.value,
-                        "worker_id": worker_id
-                    }
-                },
+                {"$set": {"status_stage1": ProductStatus.PROCESSING.value}},
                 return_document=True
             )
 
@@ -148,7 +141,7 @@ class TargetMongoStore:
         return products
 
     async def bulk_update_products(self, updates: List[Dict[str, Any]]):
-        """Массовое обновление товаров"""
+        """Массовое обновление товаров - упрощенная схема"""
         if not updates:
             return
 
@@ -176,22 +169,16 @@ class TargetMongoStore:
 
                 if "okpd_groups" in data:
                     update_data["okpd_groups"] = data["okpd_groups"]
-                    update_data["worker_id"] = data.get("worker_id")
 
                 # Поля второго этапа
                 if "status_stage2" in data:
                     update_data["status_stage2"] = data["status_stage2"]
-                    update_data["worker_id"] = data.get("worker_id")
 
                 if "okpd2_code" in data:
                     update_data["okpd2_code"] = data["okpd2_code"]
 
                 if "okpd2_name" in data:
                     update_data["okpd2_name"] = data["okpd2_name"]
-
-                # Обновляем processed_at при завершении
-                if "status_stage2" in data and data["status_stage2"] in ["classified", "none_classified"]:
-                    update_data["processed_at"] = datetime.utcnow()
 
                 operation = UpdateOne(filter_query, {"$set": update_data})
                 bulk_operations.append(operation)

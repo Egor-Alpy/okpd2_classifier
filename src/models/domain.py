@@ -22,7 +22,7 @@ class ProductStatusStage2(str, Enum):
 
 
 class Product(BaseModel):
-    """Модель товара в БД"""
+    """Модель товара в БД - упрощенная схема"""
     title: str = Field(..., description="Наименование товара")
     source_collection: str = Field(..., description="Название исходной коллекции")
     source_id: str = Field(..., description="ID товара в исходной БД")
@@ -36,10 +36,6 @@ class Product(BaseModel):
     # Статусы
     status_stage1: ProductStatus = Field(ProductStatus.PENDING, description="Статус первого этапа")
     status_stage2: Optional[str] = Field(None, description="Статус второго этапа")
-
-    # Метаданные обработки
-    processed_at: Optional[datetime] = Field(None, description="Дата завершения классификации")
-    worker_id: Optional[str] = Field(None, description="ID последнего воркера")
 
     class Config:
         use_enum_values = True

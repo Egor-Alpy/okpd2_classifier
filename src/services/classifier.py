@@ -213,7 +213,7 @@ class StageOneClassifier:
             products: List[Dict[str, Any]],
             results: Dict[Any, List[str]]
     ):
-        """Обновить товары с результатами классификации"""
+        """Обновить товары с результатами классификации - упрощенная схема"""
         updates = []
 
         for product in products:
@@ -225,8 +225,7 @@ class StageOneClassifier:
                     "_id": product_id,
                     "data": {
                         "status_stage1": ProductStatus.CLASSIFIED.value,
-                        "okpd_groups": results[product_id],
-                        "worker_id": self.worker_id
+                        "okpd_groups": results[product_id]
                     }
                 })
                 logger.debug(f"Product {product_id} classified with groups: {results[product_id]}")
@@ -235,8 +234,7 @@ class StageOneClassifier:
                 updates.append({
                     "_id": product_id,
                     "data": {
-                        "status_stage1": ProductStatus.NONE_CLASSIFIED.value,
-                        "worker_id": self.worker_id
+                        "status_stage1": ProductStatus.NONE_CLASSIFIED.value
                     }
                 })
                 logger.debug(f"Product {product_id} not classified")
@@ -251,8 +249,7 @@ class StageOneClassifier:
             updates.append({
                 "_id": product_id,
                 "data": {
-                    "status_stage1": ProductStatus.FAILED.value,
-                    "worker_id": self.worker_id
+                    "status_stage1": ProductStatus.FAILED.value
                 }
             })
 
