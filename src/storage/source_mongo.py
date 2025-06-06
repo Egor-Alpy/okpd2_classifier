@@ -66,7 +66,7 @@ class SourceMongoStore:
             else:
                 collection = self.collection
 
-            if not collection:
+            if collection is None:
                 raise ValueError("No collection specified")
 
             query = {}
@@ -100,7 +100,7 @@ class SourceMongoStore:
         else:
             collection = self.collection
 
-        if not collection:
+        if collection is None:
             raise ValueError("No collection specified")
 
         return await collection.count_documents({})

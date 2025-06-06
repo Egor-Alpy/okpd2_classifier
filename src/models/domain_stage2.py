@@ -16,17 +16,17 @@ class ProductStatusStage2(str, Enum):
 class ProductStageTwo(BaseModel):
     """Модель для второго этапа классификации"""
     # Поля из первого этапа (не изменяем)
-    collection_name: str
-    old_mongo_id: str
+    source_collection: str
+    source_id: str
     title: str
-    okpd_group: List[str]  # 5-значные группы из первого этапа
-    status_stg1: str
+    okpd_groups: List[str]  # 5-значные группы из первого этапа
+    status_stage1: str
     created_at: datetime
 
     # Новые поля для второго этапа
     okpd2_code: Optional[str] = Field(None, description="Точный код ОКПД2")
     okpd2_name: Optional[str] = Field(None, description="Название по ОКПД2")
-    status_stg2: ProductStatusStage2 = Field(
+    status_stage2: ProductStatusStage2 = Field(
         ProductStatusStage2.PENDING,
         description="Статус второго этапа"
     )

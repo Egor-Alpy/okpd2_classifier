@@ -45,11 +45,11 @@ class ClassificationWorkerStage2:
 
             # Проверяем наличие товаров для второго этапа
             count = await self.target_store.products.count_documents({
-                "status_stg1": "classified",
-                "okpd_group": {"$exists": True, "$ne": []},
+                "status_stage1": "classified",
+                "okpd_groups": {"$exists": True, "$ne": []},
                 "$or": [
-                    {"status_stg2": {"$exists": False}},
-                    {"status_stg2": "pending"}
+                    {"status_stage2": {"$exists": False}},
+                    {"status_stage2": "pending"}
                 ]
             })
             logger.info(f"Found {count} products ready for stage 2 classification")
