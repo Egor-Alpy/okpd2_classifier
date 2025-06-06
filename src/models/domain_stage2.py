@@ -1,16 +1,9 @@
 from pydantic import BaseModel, Field
 from datetime import datetime
 from typing import Optional, List
-from enum import Enum
 
-
-class ProductStatusStage2(str, Enum):
-    """Статусы второго этапа классификации"""
-    PENDING = "pending"  # Ожидает обработки
-    PROCESSING = "processing"  # В процессе обработки
-    CLASSIFIED = "classified"  # Успешно классифицирован с точным кодом
-    NONE_CLASSIFIED = "none_classified"  # Не удалось найти точный код
-    FAILED = "failed"  # Ошибка при обработке
+# Импортируем ProductStatusStage2 из domain.py
+from src.models.domain import ProductStatusStage2
 
 
 class ProductStageTwo(BaseModel):
