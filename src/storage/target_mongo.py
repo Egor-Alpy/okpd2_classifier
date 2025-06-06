@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 class TargetMongoStore:
     """Работа с целевой MongoDB"""
 
-    def __init__(self, database_name: str, collection_name: str = "products_classifier"):
+    def __init__(self, database_name: str, collection_name: str = None):
         connection_string = settings.target_mongodb_connection_string
         logger.info(f"Connecting to Target MongoDB with: {connection_string}")
 
@@ -25,6 +25,8 @@ class TargetMongoStore:
             connectTimeoutMS=5000
         )
         self.db: AsyncIOMotorDatabase = self.client[database_name]
+        # Используем настраиваемое имя коллекции или из настроек
+        collection_name = collection_name or settings.target_collection_name
         self.products = self.db[collection_name]
         self.migration_jobs = self.db.migration_jobs
         logger.info(f"Using collection: {collection_name}")

@@ -12,8 +12,9 @@ class Settings(BaseSettings):
     source_mongo_authsource: Optional[str] = None
     source_mongo_authmechanism: str = "SCRAM-SHA-256"
     source_mongo_direct_connection: bool = False
-    source_mongodb_database: str = "source_products"
-    source_collection_name: str = "products"
+    source_mongodb_database: str = "products"
+    # Если пусто - берем из всех коллекций
+    source_collection_name: Optional[str] = None
 
     # Target MongoDB (наша новая база)
     target_mongo_host: str = "localhost"
@@ -24,14 +25,14 @@ class Settings(BaseSettings):
     target_mongo_authmechanism: str = "SCRAM-SHA-256"
     target_mongo_direct_connection: bool = False
     target_mongodb_database: str = "TenderDB"
+    target_collection_name: str = "classified_products"
 
     # Redis
     redis_url: str = "redis://localhost:6379"
 
     # Anthropic
     anthropic_api_key: str
-    # Используем Claude 3.7 Sonnet для prompt caching без учета в ITPM
-    anthropic_model: str = "claude-3-7-sonnet-20250105"
+    anthropic_model: str = "claude-3-5-sonnet-20241022"
 
     # Prompt caching
     enable_prompt_caching: bool = True
@@ -44,12 +45,11 @@ class Settings(BaseSettings):
 
     # Processing
     migration_batch_size: int = 1000
-    # Увеличиваем размер батча для эффективного использования кэша
     classification_batch_size: int = 250
     max_workers: int = 1
 
     # Rate limit settings
-    rate_limit_delay: int = 60  # Уменьшаем задержку
+    rate_limit_delay: int = 6
     max_retries: int = 3
 
     # API
@@ -59,14 +59,18 @@ class Settings(BaseSettings):
     def source_mongodb_connection_string(self) -> str:
         """Формирование строки подключения для Source MongoDB"""
         if self.source_mongo_user and self.source_mongo_pass:
+            # URL encode пароля для безопасности
+            user = quote_plus(self.source_mongo_user)
+            password = quote_plus(self.source_mongo_pass)
+
             connection_string = (
-                f"mongodb://{self.source_mongo_user}:{quote_plus(self.source_mongo_pass)}@"
+                f"mongodb://{user}:{password}@"
                 f"{self.source_mongo_host}:{self.source_mongo_port}"
             )
 
             if self.source_mongo_authsource:
-                connection_string += f"/{self.source_mongo_authsource}"
-                connection_string += f"?authMechanism={self.source_mongo_authmechanism}"
+                connection_string += f"/?authSource={self.source_mongo_authsource}"
+                connection_string += f"&authMechanism={self.source_mongo_authmechanism}"
             else:
                 connection_string += f"/?authMechanism={self.source_mongo_authmechanism}"
         else:
@@ -77,7 +81,30 @@ class Settings(BaseSettings):
     @property
     def target_mongodb_connection_string(self) -> str:
         """Формирование строки подключения для Target MongoDB"""
-        connection_string = f"mongodb://{self.target_mongo_host}:{self.target_mongo_port}"
+        if self.target_mongo_user and self.target_mongo_pass:
+            # URL encode для безопасности (особенно важно для паролей со спецсимволами)
+            user = quote_plus(self.target_mongo_user)
+            password = quote_plus(self.target_mongo_pass)
+
+            connection_string = (
+                f"mongodb://{user}:{password}@"
+                f"{self.target_mongo_host}:{self.target_mongo_port}"
+            )
+
+            # Добавляем параметры аутентификации
+            params = []
+
+            if self.target_mongo_authsource:
+                params.append(f"authSource={self.target_mongo_authsource}")
+
+            params.append(f"authMechanism={self.target_mongo_authmechanism}")
+
+            if params:
+                connection_string += "/?" + "&".join(params)
+
+        else:
+            connection_string = f"mongodb://{self.target_mongo_host}:{self.target_mongo_port}"
+
         return connection_string
 
     @property
@@ -93,6 +120,8 @@ class Settings(BaseSettings):
 
     class Config:
         env_file = ".env"
+        # Явно указываем, что переменные окружения не чувствительны к регистру
+        case_sensitive = False
 
 
 settings = Settings()
