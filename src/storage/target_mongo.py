@@ -85,7 +85,6 @@ class TargetMongoStore:
                 "title": product["title"],
                 "okpd_group": None,
                 "status_stg1": ProductStatus.PENDING.value,
-                "created_at": datetime.utcnow()
             }
             documents.append(doc)
 
@@ -178,14 +177,6 @@ class TargetMongoStore:
                 if "okpd2_name" in data:
                     update_data["okpd2_name"] = data["okpd2_name"]
 
-                if "stage2_started_at" in data:
-                    update_data["stage2_started_at"] = data["stage2_started_at"]
-
-                if "stage2_completed_at" in data:
-                    update_data["stage2_completed_at"] = data["stage2_completed_at"]
-
-                if "stage2_worker_id" in data:
-                    update_data["stage2_worker_id"] = data["stage2_worker_id"]
 
                 operation = UpdateOne(filter_query, {"$set": update_data})
                 bulk_operations.append(operation)
