@@ -9,8 +9,7 @@ import os
 from src.services.ai_client import AnthropicClient
 from src.services.ai_client_stage2 import PromptBuilderStage2
 from src.storage.target_mongo import TargetMongoStore
-from src.models.domain import ProductStatus
-from src.models.domain_stage2 import ProductStatusStage2
+from src.models.domain import ProductStatus, ProductStatusStage2
 
 logger = logging.getLogger(__name__)
 
@@ -23,12 +22,14 @@ class StageTwoClassifier:
             ai_client: AnthropicClient,
             target_store: TargetMongoStore,
             batch_size: int = 50,
-            worker_id: str = None
+            worker_id: str = None,
+            collection_name: str = None
     ):
         self.ai_client = ai_client
         self.target_store = target_store
         self.batch_size = batch_size
         self.worker_id = worker_id or f"stage2_worker_{uuid.uuid4().hex[:8]}"
+        self.collection_name = collection_name
         self.prompt_builder = PromptBuilderStage2()
 
         # Rate limit settings
@@ -269,7 +270,7 @@ class StageTwoClassifier:
         if products:
             logger.info(f"Locked {len(products)} products for stage 2 processing")
 
-        return productsи
+        return products
 
     async def run_continuous_classification(self):
         """Запустить непрерывную классификацию второго этапа"""

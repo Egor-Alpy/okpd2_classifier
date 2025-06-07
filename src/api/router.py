@@ -1,20 +1,16 @@
 from fastapi import APIRouter
-from src.api.endpoints import classification, classification_stage2, tender_classification
+from src.api.endpoints import classification, tender_classification
 
 router = APIRouter()
 
+# Статистика
 router.include_router(
     classification.router,
-    prefix="/classification",
-    tags=["classification"]
+    prefix="/stats",
+    tags=["statistics"]
 )
 
-router.include_router(
-    classification_stage2.router,
-    prefix="/classification/stage2",
-    tags=["classification_stage2"]
-)
-
+# Классификация позиций тендера
 router.include_router(
     tender_classification.router,
     prefix="/tender",

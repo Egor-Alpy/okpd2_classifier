@@ -1,7 +1,7 @@
 version: '3.8'
 
 services:
-  # Redis в контейнере
+  # Redis
   redis:
     image: redis:7-alpine
     ports:
@@ -20,19 +20,12 @@ services:
       - .env
     environment:
       - REDIS_URL=redis://redis:6379
-      # Прокси настройки из .env
-      - HTTP_PROXY=${HTTP_PROXY}
-      - HTTPS_PROXY=${HTTPS_PROXY}
-      - SOCKS_PROXY=${SOCKS_PROXY}
-      - NO_PROXY=localhost,127.0.0.1,redis,host.docker.internal
     depends_on:
       - redis
     volumes:
-      - ./src/data:/app/src/data:ro  # Монтируем данные ОКПД2
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+      - ./src/data:/app/src/data:ro
     restart: unless-stopped
-    command: uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload
+    command: uvicorn src.main:app --host 0.0.0.0 --port 8000
 
   # Воркер миграции
   migration-worker:
@@ -41,18 +34,14 @@ services:
       - .env
     environment:
       - REDIS_URL=redis://redis:6379
-      - HTTP_PROXY=${HTTP_PROXY}
-      - HTTPS_PROXY=${HTTPS_PROXY}
-      - SOCKS_PROXY=${SOCKS_PROXY}
-      - NO_PROXY=localhost,127.0.0.1,redis,host.docker.internal
     depends_on:
       - redis
     volumes:
       - ./src/data:/app/src/data:ro
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     restart: unless-stopped
     command: python -m src.workers.migration_worker
+    profiles:
+      - migration
 
   # Воркер классификации - первый этап
   classification-worker-1:
@@ -60,51 +49,16 @@ services:
     env_file:
       - .env
     environment:
-      - WORKER_ID=worker_1
+      - WORKER_ID=worker_${WORKER_NUMBER:-1}
       - REDIS_URL=redis://redis:6379
-      - CLASSIFICATION_BATCH_SIZE=${CLASSIFICATION_BATCH_SIZE:-250}
-      - RATE_LIMIT_DELAY=${RATE_LIMIT_DELAY:-6}
-      - MAX_RETRIES=${MAX_RETRIES:-3}
-      - ENABLE_PROMPT_CACHING=${ENABLE_PROMPT_CACHING:-true}
-      - HTTP_PROXY=${HTTP_PROXY}
-      - HTTPS_PROXY=${HTTPS_PROXY}
-      - SOCKS_PROXY=${SOCKS_PROXY}
-      - NO_PROXY=localhost,127.0.0.1,redis,host.docker.internal
     depends_on:
       - redis
     volumes:
       - ./src/data:/app/src/data:ro
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     restart: unless-stopped
-    command: python -m src.workers.classification_worker --worker-id worker_1
-
-  # Второй воркер классификации (опционально)
-  classification-worker-2:
-    build: .
-    env_file:
-      - .env
-    environment:
-      - WORKER_ID=worker_2
-      - REDIS_URL=redis://redis:6379
-      - CLASSIFICATION_BATCH_SIZE=${CLASSIFICATION_BATCH_SIZE:-250}
-      - RATE_LIMIT_DELAY=${RATE_LIMIT_DELAY:-6}
-      - MAX_RETRIES=${MAX_RETRIES:-3}
-      - ENABLE_PROMPT_CACHING=${ENABLE_PROMPT_CACHING:-true}
-      - HTTP_PROXY=${HTTP_PROXY}
-      - HTTPS_PROXY=${HTTPS_PROXY}
-      - SOCKS_PROXY=${SOCKS_PROXY}
-      - NO_PROXY=localhost,127.0.0.1,redis,host.docker.internal
-    depends_on:
-      - redis
-    volumes:
-      - ./src/data:/app/src/data:ro
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+    command: python -m src.workers.classification_worker --worker-id worker_${WORKER_NUMBER:-1}
     profiles:
-      - multi-worker
-    restart: unless-stopped
-    command: python -m src.workers.classification_worker --worker-id worker_2
+      - workers
 
   # Воркер второго этапа классификации
   classification-worker-stage2-1:
@@ -112,49 +66,17 @@ services:
     env_file:
       - .env
     environment:
-      - WORKER_ID=stage2_worker_1
-      - REDIS_URL=redis://redis:6379
-      - CLASSIFICATION_BATCH_SIZE=15  # Меньший батч для второго этапа
-      - RATE_LIMIT_DELAY=${RATE_LIMIT_DELAY:-10}
-      - MAX_RETRIES=${MAX_RETRIES:-3}
-      - HTTP_PROXY=${HTTP_PROXY}
-      - HTTPS_PROXY=${HTTPS_PROXY}
-      - SOCKS_PROXY=${SOCKS_PROXY}
-      - NO_PROXY=localhost,127.0.0.1,redis,host.docker.internal
-    depends_on:
-      - redis
-    volumes:
-      - ./src/data:/app/src/data:ro
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    restart: unless-stopped
-    command: python -m src.workers.classification_worker_stage2 --worker-id stage2_worker_1
-
-  # Второй воркер второго этапа (опционально)
-  classification-worker-stage2-2:
-    build: .
-    env_file:
-      - .env
-    environment:
-      - WORKER_ID=stage2_worker_2
+      - WORKER_ID=stage2_worker_${WORKER_NUMBER:-1}
       - REDIS_URL=redis://redis:6379
       - CLASSIFICATION_BATCH_SIZE=15
-      - RATE_LIMIT_DELAY=${RATE_LIMIT_DELAY:-10}
-      - MAX_RETRIES=${MAX_RETRIES:-3}
-      - HTTP_PROXY=${HTTP_PROXY}
-      - HTTPS_PROXY=${HTTPS_PROXY}
-      - SOCKS_PROXY=${SOCKS_PROXY}
-      - NO_PROXY=localhost,127.0.0.1,redis,host.docker.internal
     depends_on:
       - redis
     volumes:
       - ./src/data:/app/src/data:ro
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    profiles:
-      - multi-worker
     restart: unless-stopped
-    command: python -m src.workers.classification_worker_stage2 --worker-id stage2_worker_2
+    command: python -m src.workers.classification_worker_stage2 --worker-id stage2_worker_${WORKER_NUMBER:-1}
+    profiles:
+      - workers-stage2
 
 volumes:
   redis_data:
