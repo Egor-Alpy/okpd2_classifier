@@ -40,7 +40,10 @@ class ClassificationWorkerStage2:
         try:
             # Инициализируем компоненты
             logger.info("Connecting to target MongoDB...")
-            self.target_store = TargetMongoStore(settings.target_mongodb_database)
+            self.target_store = TargetMongoStore(
+                settings.target_mongodb_database,
+                settings.target_collection_name
+            )
 
             # Инициализируем target store
             logger.info("Initializing target store...")
@@ -48,16 +51,16 @@ class ClassificationWorkerStage2:
 
             # Формируем запрос для проверки товаров
             query = {
-                "status_stage1": "classified",
+                "status_stg1": "classified",
                 "okpd_groups": {"$exists": True, "$ne": []},
                 "$or": [
-                    {"status_stage2": {"$exists": False}},
-                    {"status_stage2": "pending"}
+                    {"status_stg2": {"$exists": False}},
+                    {"status_stg2": "pending"}
                 ]
             }
 
             if self.collection_name:
-                query["source_collection"] = self.collection_name
+                query["collection_name"] = self.collection_name
                 logger.info(f"Checking products for collection: {self.collection_name}")
 
             # Проверяем наличие товаров для второго этапа
@@ -137,6 +140,12 @@ async def main():
                         help='Logging level')
     args = parser.parse_args()
 
+    # Определяем collection_name с учетом приоритетов
+    collection_name = args.collection
+    if collection_name is None and settings.source_collection_name:
+        collection_name = settings.source_collection_name
+        logger.info(f"Using collection from env: {collection_name}")
+
     # Настройка уровня логирования из аргументов
     log_level = getattr(logging, args.log_level.upper())
     logging.getLogger().setLevel(log_level)
@@ -148,7 +157,7 @@ async def main():
     logger.info("OKPD2 Stage 2 Classification Worker Starting")
     logger.info("=" * 60)
     logger.info(f"Worker ID: {args.worker_id}")
-    logger.info(f"Collection: {args.collection or 'ALL'}")
+    logger.info(f"Collection: {collection_name or 'ALL'}")
     logger.info(f"Log Level: {args.log_level}")
     logger.info(f"Batch Size: {min(settings.classification_batch_size, 15)}")
     logger.info(f"Rate Limit Delay: {settings.rate_limit_delay}s")
@@ -158,7 +167,7 @@ async def main():
     logger.info("=" * 60)
 
     try:
-        worker = ClassificationWorkerStage2(args.worker_id, args.collection)
+        worker = ClassificationWorkerStage2(args.worker_id, collection_name)
         await worker.start()
     except KeyboardInterrupt:
         logger.info("Shutdown requested by user")

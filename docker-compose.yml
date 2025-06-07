@@ -43,7 +43,7 @@ services:
     profiles:
       - migration
 
-  # Воркер классификации - первый этап
+  # Воркер классификации - первый этап (все коллекции)
   classification-worker-1:
     build: .
     env_file:
@@ -60,7 +60,25 @@ services:
     profiles:
       - workers
 
-  # Воркер второго этапа классификации
+  # Воркер классификации для конкретной коллекции
+  classification-worker-collection:
+    build: .
+    env_file:
+      - .env
+    environment:
+      - WORKER_ID=worker_${COLLECTION:-default}
+      - REDIS_URL=redis://redis:6379
+      - SOURCE_COLLECTION_NAME=${COLLECTION:-}
+    depends_on:
+      - redis
+    volumes:
+      - ./src/data:/app/src/data:ro
+    restart: unless-stopped
+    command: python -m src.workers.classification_worker --worker-id worker_${COLLECTION:-default} --collection ${COLLECTION:-}
+    profiles:
+      - workers-collection
+
+  # Воркер второго этапа классификации (все коллекции)
   classification-worker-stage2-1:
     build: .
     env_file:
@@ -78,5 +96,43 @@ services:
     profiles:
       - workers-stage2
 
+  # Воркер второго этапа для конкретной коллекции
+  classification-worker-stage2-collection:
+    build: .
+    env_file:
+      - .env
+    environment:
+      - WORKER_ID=stage2_worker_${COLLECTION:-default}
+      - REDIS_URL=redis://redis:6379
+      - CLASSIFICATION_BATCH_SIZE=15
+      - SOURCE_COLLECTION_NAME=${COLLECTION:-}
+    depends_on:
+      - redis
+    volumes:
+      - ./src/data:/app/src/data:ro
+    restart: unless-stopped
+    command: python -m src.workers.classification_worker_stage2 --worker-id stage2_worker_${COLLECTION:-default} --collection ${COLLECTION:-}
+    profiles:
+      - workers-stage2-collection
+
 volumes:
   redis_data:
+
+# Примеры использования:
+#
+# Запуск API:
+# docker-compose up -d api redis
+#
+# Запуск миграции:
+# docker-compose --profile migration up migration-worker
+#
+# Запуск воркеров для всех коллекций:
+# docker-compose --profile workers up classification-worker-1
+# docker-compose --profile workers-stage2 up classification-worker-stage2-1
+#
+# Запуск воркера для конкретной коллекции:
+# COLLECTION=electronics docker-compose --profile workers-collection up classification-worker-collection
+# COLLECTION=electronics docker-compose --profile workers-stage2-collection up classification-worker-stage2-collection
+#
+# Масштабирование воркеров:
+# docker-compose --profile workers up --scale classification-worker-1=3

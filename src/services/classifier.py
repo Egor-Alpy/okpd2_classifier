@@ -229,7 +229,7 @@ class StageOneClassifier:
                 updates.append({
                     "_id": product_id,
                     "data": {
-                        "status_stage1": ProductStatus.CLASSIFIED.value,
+                        "status_stg1": ProductStatus.CLASSIFIED.value,
                         "okpd_groups": results[product_id]
                     }
                 })
@@ -239,7 +239,7 @@ class StageOneClassifier:
                 updates.append({
                     "_id": product_id,
                     "data": {
-                        "status_stage1": ProductStatus.NONE_CLASSIFIED.value
+                        "status_stg1": ProductStatus.NONE_CLASSIFIED.value
                     }
                 })
                 logger.debug(f"Product {product_id} not classified")
@@ -254,7 +254,7 @@ class StageOneClassifier:
             updates.append({
                 "_id": product_id,
                 "data": {
-                    "status_stage1": ProductStatus.FAILED.value
+                    "status_stg1": ProductStatus.FAILED.value
                 }
             })
 
@@ -277,11 +277,11 @@ class StageOneClassifier:
             batch_size = 1 if first_batch else current_batch_size
 
             try:
-                # Получаем pending товары атомарно
+                # Получаем pending товары атомарно с фильтрацией по коллекции
                 products = await self.target_store.get_pending_products_atomic_by_collection(
                     batch_size,
                     self.worker_id,
-                    self.collection_name
+                    self.collection_name  # Передаем collection_name
                 )
                 first_batch = False
 

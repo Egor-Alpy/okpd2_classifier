@@ -6,7 +6,7 @@ import logging
 from pymongo import UpdateOne
 from pymongo.errors import BulkWriteError
 from src.core.config import settings
-from src.models.domain import ProductStatus
+from src.models.domain import ProductStatus, ProductStatusStage2
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +61,7 @@ class TargetMongoStore:
             await self.products.create_index("created_at")
             await self.products.create_index("okpd_group")
             await self.products.create_index("status_stg2")  # Добавлен индекс для второго этапа
+            await self.products.create_index("collection_name")  # Индекс для фильтрации по коллекции
 
             # Индекс для migration_jobs
             await self.migration_jobs.create_index("job_id", unique=True)
@@ -85,6 +86,7 @@ class TargetMongoStore:
                 "title": product["title"],
                 "okpd_group": None,
                 "status_stg1": ProductStatus.PENDING.value,
+                "created_at": datetime.utcnow()
             }
             documents.append(doc)
 
@@ -137,6 +139,40 @@ class TargetMongoStore:
 
         return products
 
+    async def get_pending_products_atomic_by_collection(
+            self,
+            limit: int,
+            worker_id: str,
+            collection_name: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """Атомарно получить и заблокировать товары для классификации с фильтрацией по коллекции"""
+        products = []
+
+        # Базовый фильтр
+        filter_query = {"status_stg1": ProductStatus.PENDING.value}
+
+        # Добавляем фильтр по коллекции если указана
+        if collection_name:
+            filter_query["collection_name"] = collection_name
+            logger.info(f"Filtering products by collection: {collection_name}")
+
+        for _ in range(limit):
+            doc = await self.products.find_one_and_update(
+                filter_query,
+                {"$set": {"status_stg1": ProductStatus.PROCESSING.value}},
+                return_document=True
+            )
+
+            if doc:
+                products.append(doc)
+            else:
+                break
+
+        if products:
+            logger.info(f"Locked {len(products)} products from collection '{collection_name}' for processing")
+
+        return products
+
     async def bulk_update_products(self, updates: List[Dict[str, Any]]):
         """Массовое обновление товаров"""
         if not updates:
@@ -164,8 +200,8 @@ class TargetMongoStore:
                 if "status_stg1" in data:
                     update_data["status_stg1"] = data["status_stg1"]
 
-                if "okpd_group" in data:
-                    update_data["okpd_group"] = data["okpd_group"]
+                if "okpd_groups" in data:
+                    update_data["okpd_groups"] = data["okpd_groups"]
 
                 # Поля второго этапа
                 if "status_stg2" in data:
@@ -176,7 +212,6 @@ class TargetMongoStore:
 
                 if "okpd2_name" in data:
                     update_data["okpd2_name"] = data["okpd2_name"]
-
 
                 operation = UpdateOne(filter_query, {"$set": update_data})
                 bulk_operations.append(operation)

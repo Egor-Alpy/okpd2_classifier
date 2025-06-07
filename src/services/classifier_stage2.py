@@ -43,6 +43,9 @@ class StageTwoClassifier:
         logger.info(f"Stage 2 Classifier initialized with batch_size={batch_size}, "
                     f"rate_limit_delay={self.rate_limit_delay}s")
 
+        if collection_name:
+            logger.info(f"Stage 2 Classifier will process only collection: {collection_name}")
+
     async def process_batch(self, products: List[Dict[str, Any]]) -> Dict[str, Any]:
         """Обработать батч товаров второго этапа с кэшированием"""
         if not products:
@@ -209,7 +212,7 @@ class StageTwoClassifier:
                 updates.append({
                     "_id": product_id,
                     "data": {
-                        "status_stage2": ProductStatusStage2.CLASSIFIED.value,
+                        "status_stg2": ProductStatusStage2.CLASSIFIED.value,
                         "okpd2_code": code,
                         "okpd2_name": code_name
                     }
@@ -220,7 +223,7 @@ class StageTwoClassifier:
                 updates.append({
                     "_id": product_id,
                     "data": {
-                        "status_stage2": ProductStatusStage2.NONE_CLASSIFIED.value
+                        "status_stg2": ProductStatusStage2.NONE_CLASSIFIED.value
                     }
                 })
                 logger.debug(f"Product {product_id} not classified in stage 2")
@@ -236,7 +239,7 @@ class StageTwoClassifier:
             updates.append({
                 "_id": product_id,
                 "data": {
-                    "status_stage2": ProductStatusStage2.FAILED.value
+                    "status_stg2": ProductStatusStage2.FAILED.value
                 }
             })
 
@@ -247,18 +250,25 @@ class StageTwoClassifier:
         """Получить батч pending товаров для второго этапа"""
         products = []
 
+        # Базовый фильтр
+        filter_query = {
+            "status_stg1": ProductStatus.CLASSIFIED.value,
+            "okpd_groups": {"$exists": True, "$ne": []},
+            "$or": [
+                {"status_stg2": {"$exists": False}},
+                {"status_stg2": ProductStatusStage2.PENDING.value}
+            ]
+        }
+
+        # Добавляем фильтр по коллекции если указана
+        if self.collection_name:
+            filter_query["collection_name"] = self.collection_name
+
         # Атомарно получаем и блокируем товары
         for _ in range(limit):
             doc = await self.target_store.products.find_one_and_update(
-                {
-                    "status_stage1": ProductStatus.CLASSIFIED.value,
-                    "okpd_groups": {"$exists": True, "$ne": []},
-                    "$or": [
-                        {"status_stage2": {"$exists": False}},
-                        {"status_stage2": ProductStatusStage2.PENDING.value}
-                    ]
-                },
-                {"$set": {"status_stage2": ProductStatusStage2.PROCESSING.value}},
+                filter_query,
+                {"$set": {"status_stg2": ProductStatusStage2.PROCESSING.value}},
                 return_document=True
             )
 
@@ -269,6 +279,8 @@ class StageTwoClassifier:
 
         if products:
             logger.info(f"Locked {len(products)} products for stage 2 processing")
+            if self.collection_name:
+                logger.info(f"Collection filter: {self.collection_name}")
 
         return products
 
@@ -276,6 +288,9 @@ class StageTwoClassifier:
         """Запустить непрерывную классификацию второго этапа"""
         logger.info(f"Starting continuous stage 2 classification for worker {self.worker_id}")
         logger.info("Using per-class caching for optimal performance")
+
+        if self.collection_name:
+            logger.info(f"Processing only collection: {self.collection_name}")
 
         while True:
             try:
