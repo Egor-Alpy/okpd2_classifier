@@ -21,12 +21,14 @@ class StageOneClassifier:
             ai_client: AnthropicClient,
             target_store: TargetMongoStore,
             batch_size: int = 300,
-            worker_id: str = None
+            worker_id: str = None,
+            collection_name: str = None
     ):
         self.ai_client = ai_client
         self.target_store = target_store
         self.batch_size = batch_size
         self.worker_id = worker_id or f"worker_{uuid.uuid4().hex[:8]}"
+        self.collection_name = collection_name
         self.prompt_builder = PromptBuilder()
 
         # Получаем кэшируемый контент один раз
@@ -44,6 +46,9 @@ class StageOneClassifier:
         logger.info(f"Classifier initialized with batch_size={batch_size}, "
                     f"rate_limit_delay={self.rate_limit_delay}s, "
                     f"max_retries={self.max_retries}")
+
+        if collection_name:
+            logger.info(f"Classifier will process only collection: {collection_name}")
 
     async def process_batch(self, products: List[Dict[str, Any]]) -> Dict[str, Any]:
         """Обработать батч товаров с использованием кэша"""
@@ -213,7 +218,7 @@ class StageOneClassifier:
             products: List[Dict[str, Any]],
             results: Dict[Any, List[str]]
     ):
-        """Обновить товары с результатами классификации"""
+        """Обновить товары с результатами классификации - упрощенная схема"""
         updates = []
 
         for product in products:
@@ -224,8 +229,8 @@ class StageOneClassifier:
                 updates.append({
                     "_id": product_id,
                     "data": {
-                        "status_stg1": ProductStatus.CLASSIFIED.value,
-                        "okpd_group": results[product_id]
+                        "status_stage1": ProductStatus.CLASSIFIED.value,
+                        "okpd_groups": results[product_id]
                     }
                 })
                 logger.debug(f"Product {product_id} classified with groups: {results[product_id]}")
@@ -234,7 +239,7 @@ class StageOneClassifier:
                 updates.append({
                     "_id": product_id,
                     "data": {
-                        "status_stg1": ProductStatus.NONE_CLASSIFIED.value
+                        "status_stage1": ProductStatus.NONE_CLASSIFIED.value
                     }
                 })
                 logger.debug(f"Product {product_id} not classified")
@@ -249,7 +254,7 @@ class StageOneClassifier:
             updates.append({
                 "_id": product_id,
                 "data": {
-                    "status_stg1": ProductStatus.FAILED.value
+                    "status_stage1": ProductStatus.FAILED.value
                 }
             })
 
@@ -261,6 +266,9 @@ class StageOneClassifier:
         logger.info(f"Starting continuous classification for worker {self.worker_id}...")
         logger.info(f"Using prompt caching with Claude 3.7 Sonnet")
 
+        if self.collection_name:
+            logger.info(f"Processing only collection: {self.collection_name}")
+
         first_batch = True
         consecutive_timeouts = 0
         current_batch_size = self.batch_size
@@ -270,9 +278,10 @@ class StageOneClassifier:
 
             try:
                 # Получаем pending товары атомарно
-                products = await self.target_store.get_pending_products_atomic(
+                products = await self.target_store.get_pending_products_atomic_by_collection(
                     batch_size,
-                    self.worker_id
+                    self.worker_id,
+                    self.collection_name
                 )
                 first_batch = False
 

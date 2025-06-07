@@ -82,7 +82,7 @@ class StageTwoClassifier:
 
                     # Получаем кэшированный контент для групп товаров
                     # Берем группы первого товара (они должны быть из одного класса)
-                    sample_groups = class_products[0].get("okpd_group", [])
+                    sample_groups = class_products[0].get("okpd_groups", [])
                     cached_content = self.prompt_builder.get_cached_content_for_groups(sample_groups)
 
                     if not cached_content:
@@ -152,7 +152,7 @@ class StageTwoClassifier:
         products_by_class = {}
 
         for product in products:
-            okpd_groups = product.get("okpd_group", [])
+            okpd_groups = product.get("okpd_groups", [])
             if okpd_groups:
                 # Берем класс из первой группы
                 main_class = okpd_groups[0][:2]
@@ -191,9 +191,8 @@ class StageTwoClassifier:
             products: List[Dict[str, Any]],
             results: Dict[Any, Dict[str, str]]
     ):
-        """Обновить товары с результатами второго этапа"""
+        """Обновить товары с результатами второго этапа - упрощенная схема"""
         updates = []
-        current_time = datetime.utcnow()
 
         for product in products:
             product_id = product["_id"]
@@ -209,11 +208,9 @@ class StageTwoClassifier:
                 updates.append({
                     "_id": product_id,
                     "data": {
-                        "status_stg2": ProductStatusStage2.CLASSIFIED.value,
+                        "status_stage2": ProductStatusStage2.CLASSIFIED.value,
                         "okpd2_code": code,
-                        "okpd2_name": code_name,
-                        "stage2_completed_at": current_time,
-                        "stage2_batch_id": self.worker_id
+                        "okpd2_name": code_name
                     }
                 })
                 logger.debug(f"Product {product_id} classified with exact code: {code}")
@@ -222,8 +219,7 @@ class StageTwoClassifier:
                 updates.append({
                     "_id": product_id,
                     "data": {
-                        "status_stg2": ProductStatusStage2.NONE_CLASSIFIED.value,
-                        "stage2_completed_at": current_time
+                        "status_stage2": ProductStatusStage2.NONE_CLASSIFIED.value
                     }
                 })
                 logger.debug(f"Product {product_id} not classified in stage 2")
@@ -234,14 +230,12 @@ class StageTwoClassifier:
     async def _mark_products_failed(self, product_ids: List[Any]):
         """Пометить товары как failed для второго этапа"""
         updates = []
-        current_time = datetime.utcnow()
 
         for product_id in product_ids:
             updates.append({
                 "_id": product_id,
                 "data": {
-                    "status_stg2": ProductStatusStage2.FAILED.value,
-                    "stage2_completed_at": current_time
+                    "status_stage2": ProductStatusStage2.FAILED.value
                 }
             })
 
@@ -256,20 +250,14 @@ class StageTwoClassifier:
         for _ in range(limit):
             doc = await self.target_store.products.find_one_and_update(
                 {
-                    "status_stg1": ProductStatus.CLASSIFIED.value,
-                    "okpd_group": {"$exists": True, "$ne": []},
+                    "status_stage1": ProductStatus.CLASSIFIED.value,
+                    "okpd_groups": {"$exists": True, "$ne": []},
                     "$or": [
-                        {"status_stg2": {"$exists": False}},
-                        {"status_stg2": ProductStatusStage2.PENDING.value}
+                        {"status_stage2": {"$exists": False}},
+                        {"status_stage2": ProductStatusStage2.PENDING.value}
                     ]
                 },
-                {
-                    "$set": {
-                        "status_stg2": ProductStatusStage2.PROCESSING.value,
-                        "stage2_started_at": datetime.utcnow(),
-                        "stage2_worker_id": self.worker_id
-                    }
-                },
+                {"$set": {"status_stage2": ProductStatusStage2.PROCESSING.value}},
                 return_document=True
             )
 
@@ -281,7 +269,7 @@ class StageTwoClassifier:
         if products:
             logger.info(f"Locked {len(products)} products for stage 2 processing")
 
-        return products
+        return productsи
 
     async def run_continuous_classification(self):
         """Запустить непрерывную классификацию второго этапа"""

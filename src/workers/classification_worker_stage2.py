@@ -23,12 +23,15 @@ logger = logging.getLogger(__name__)
 class ClassificationWorkerStage2:
     """Воркер для классификации товаров на втором этапе"""
 
-    def __init__(self, worker_id: str = "stage2_worker_1"):
+    def __init__(self, worker_id: str = "stage2_worker_1", collection_name: str = None):
         self.worker_id = worker_id
+        self.collection_name = collection_name
         self.target_store = None
         self.classifier = None
         self.running = False
         logger.info(f"Initializing stage 2 classification worker: {self.worker_id}")
+        if collection_name:
+            logger.info(f"Worker will process only collection: {collection_name}")
 
     async def start(self):
         """Запустить воркер"""
@@ -43,15 +46,22 @@ class ClassificationWorkerStage2:
             logger.info("Initializing target store...")
             await self.target_store.initialize()
 
-            # Проверяем наличие товаров для второго этапа
-            count = await self.target_store.products.count_documents({
-                "status_stg1": "classified",
-                "okpd_group": {"$exists": True, "$ne": []},
+            # Формируем запрос для проверки товаров
+            query = {
+                "status_stage1": "classified",
+                "okpd_groups": {"$exists": True, "$ne": []},
                 "$or": [
-                    {"status_stg2": {"$exists": False}},
-                    {"status_stg2": "pending"}
+                    {"status_stage2": {"$exists": False}},
+                    {"status_stage2": "pending"}
                 ]
-            })
+            }
+
+            if self.collection_name:
+                query["source_collection"] = self.collection_name
+                logger.info(f"Checking products for collection: {self.collection_name}")
+
+            # Проверяем наличие товаров для второго этапа
+            count = await self.target_store.products.count_documents(query)
             logger.info(f"Found {count} products ready for stage 2 classification")
 
             if count == 0:
@@ -76,7 +86,8 @@ class ClassificationWorkerStage2:
                 ai_client,
                 self.target_store,
                 batch_size,
-                worker_id=self.worker_id
+                worker_id=self.worker_id,
+                collection_name=self.collection_name
             )
 
             # Проверяем наличие файла с полным деревом ОКПД2
@@ -120,6 +131,7 @@ async def main():
 
     parser = argparse.ArgumentParser(description='Stage 2 Classification worker')
     parser.add_argument('--worker-id', default='stage2_worker_1', help='Worker ID')
+    parser.add_argument('--collection', default=None, help='Process only specific collection')
     parser.add_argument('--log-level', default='INFO',
                         choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'],
                         help='Logging level')
@@ -136,6 +148,7 @@ async def main():
     logger.info("OKPD2 Stage 2 Classification Worker Starting")
     logger.info("=" * 60)
     logger.info(f"Worker ID: {args.worker_id}")
+    logger.info(f"Collection: {args.collection or 'ALL'}")
     logger.info(f"Log Level: {args.log_level}")
     logger.info(f"Batch Size: {min(settings.classification_batch_size, 15)}")
     logger.info(f"Rate Limit Delay: {settings.rate_limit_delay}s")
@@ -145,7 +158,7 @@ async def main():
     logger.info("=" * 60)
 
     try:
-        worker = ClassificationWorkerStage2(args.worker_id)
+        worker = ClassificationWorkerStage2(args.worker_id, args.collection)
         await worker.start()
     except KeyboardInterrupt:
         logger.info("Shutdown requested by user")

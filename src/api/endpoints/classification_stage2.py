@@ -4,8 +4,7 @@ import logging
 from datetime import datetime
 
 from src.api.dependencies import get_target_store, verify_api_key
-from src.models.domain import ProductStatus
-from src.models.domain_stage2 import ProductStatusStage2
+from src.models.domain import ProductStatus, ProductStatusStage2
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -19,11 +18,11 @@ async def get_stage2_statistics(
     """Получить общую статистику второго этапа"""
     # Считаем товары по статусам второго этапа
     pipeline = [
-        {"$match": {"status_stg1": ProductStatus.CLASSIFIED.value}},
+        {"$match": {"status_stage1": ProductStatus.CLASSIFIED.value}},
         {"$facet": {
             "by_status": [
                 {"$group": {
-                    "_id": "$status_stg2",
+                    "_id": "$status_stage2",
                     "count": {"$sum": 1}
                 }}
             ],
@@ -57,7 +56,7 @@ async def get_stage2_statistics(
 
     status_counts = {s["_id"]: s["count"] for s in facets["by_status"] if s["_id"]}
 
-    # Товары без status_stg2 считаются pending
+    # Товары без status_stage2 считаются pending
     pending = total - sum(status_counts.values())
     pending += status_counts.get(ProductStatusStage2.PENDING.value, 0)
 
@@ -81,10 +80,10 @@ async def get_stage2_sample_products(
         api_key: str = Depends(verify_api_key)
 ):
     """Получить примеры товаров второго этапа"""
-    query = {"status_stg1": ProductStatus.CLASSIFIED.value}
+    query = {"status_stage1": ProductStatus.CLASSIFIED.value}
 
     if status:
-        query["status_stg2"] = status
+        query["status_stage2"] = status
 
     cursor = target_store.products.find(query).limit(limit)
     products = await cursor.to_list(length=limit)
@@ -107,10 +106,10 @@ async def reset_failed_stage2_products(
     """Сбросить failed товары второго этапа на pending"""
     result = await target_store.products.update_many(
         {
-            "status_stg1": ProductStatus.CLASSIFIED.value,
-            "status_stg2": ProductStatusStage2.FAILED.value
+            "status_stage1": ProductStatus.CLASSIFIED.value,
+            "status_stage2": ProductStatusStage2.FAILED.value
         },
-        {"$set": {"status_stg2": ProductStatusStage2.PENDING.value}}
+        {"$set": {"status_stage2": ProductStatusStage2.PENDING.value}}
     )
 
     return {
@@ -127,10 +126,10 @@ async def reset_processing_stage2_products(
     """Сбросить застрявшие в processing товары второго этапа на pending"""
     result = await target_store.products.update_many(
         {
-            "status_stg1": ProductStatus.CLASSIFIED.value,
-            "status_stg2": ProductStatusStage2.PROCESSING.value
+            "status_stage1": ProductStatus.CLASSIFIED.value,
+            "status_stage2": ProductStatusStage2.PROCESSING.value
         },
-        {"$set": {"status_stg2": ProductStatusStage2.PENDING.value}}
+        {"$set": {"status_stage2": ProductStatusStage2.PENDING.value}}
     )
 
     return {
@@ -146,9 +145,9 @@ async def get_stats_by_group_count(
 ):
     """Получить статистику по количеству групп у товаров"""
     pipeline = [
-        {"$match": {"status_stg1": ProductStatus.CLASSIFIED.value}},
+        {"$match": {"status_stage1": ProductStatus.CLASSIFIED.value}},
         {"$project": {
-            "group_count": {"$size": {"$ifNull": ["$okpd_group", []]}}
+            "group_count": {"$size": {"$ifNull": ["$okpd_groups", []]}}
         }},
         {"$group": {
             "_id": "$group_count",
