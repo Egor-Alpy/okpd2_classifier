@@ -1,6 +1,7 @@
 from pydantic_settings import BaseSettings
+from pydantic import field_validator
 from typing import Optional
-from urllib.parse import quote_plus
+from urllib.parse import quote
 
 
 class Settings(BaseSettings):
@@ -55,24 +56,46 @@ class Settings(BaseSettings):
     # API
     api_key: str
 
+    @field_validator('source_mongo_user', 'source_mongo_pass', 'target_mongo_user', 'target_mongo_pass',
+                     'source_mongo_authsource', 'target_mongo_authsource', 'source_collection_name',
+                     'http_proxy', 'https_proxy', 'socks_proxy', mode='before')
+    @classmethod
+    def empty_str_to_none(cls, v: str) -> Optional[str]:
+        """Преобразовать пустые строки в None"""
+        if v == '':
+            return None
+        # Для паролей логируем наличие специальных символов (для отладки)
+        if isinstance(v, str) and any(c in v for c in ['+', '@', ':', '/', '?', '#', '[', ']', '%']):
+            import logging
+            logger = logging.getLogger(__name__)
+            # Маскируем пароль, показывая только первые и последние символы
+            masked = f"{v[:2]}...{v[-2:]}" if len(v) > 4 else "***"
+            logger.debug(f"Password/value contains special characters: {masked}")
+        return v
+
     @property
     def source_mongodb_connection_string(self) -> str:
         """Формирование строки подключения для Source MongoDB"""
+        # Проверяем, что user и pass не пустые (не None и не пустая строка)
         if self.source_mongo_user and self.source_mongo_pass:
             # URL encode пароля для безопасности
-            user = quote_plus(self.source_mongo_user)
-            password = quote_plus(self.source_mongo_pass)
+            # Используем quote() вместо quote_plus() для MongoDB
+            user = quote(self.source_mongo_user, safe='')
+            password = quote(self.source_mongo_pass, safe='')
 
             connection_string = (
                 f"mongodb://{user}:{password}@"
                 f"{self.source_mongo_host}:{self.source_mongo_port}"
             )
 
+            params = []
             if self.source_mongo_authsource:
-                connection_string += f"/?authSource={self.source_mongo_authsource}"
-                connection_string += f"&authMechanism={self.source_mongo_authmechanism}"
-            else:
-                connection_string += f"/?authMechanism={self.source_mongo_authmechanism}"
+                params.append(f"authSource={self.source_mongo_authsource}")
+
+            params.append(f"authMechanism={self.source_mongo_authmechanism}")
+
+            if params:
+                connection_string += "/?" + "&".join(params)
         else:
             connection_string = f"mongodb://{self.source_mongo_host}:{self.source_mongo_port}"
 
@@ -81,10 +104,21 @@ class Settings(BaseSettings):
     @property
     def target_mongodb_connection_string(self) -> str:
         """Формирование строки подключения для Target MongoDB"""
+        import logging
+        logger = logging.getLogger(__name__)
+
+        # Проверяем, что user и pass не пустые (не None и не пустая строка)
         if self.target_mongo_user and self.target_mongo_pass:
             # URL encode для безопасности (особенно важно для паролей со спецсимволами)
-            user = quote_plus(self.target_mongo_user)
-            password = quote_plus(self.target_mongo_pass)
+            # Используем quote() вместо quote_plus() для MongoDB
+            # safe='' означает, что кодируются ВСЕ специальные символы
+            user = quote(self.target_mongo_user, safe='')
+            password = quote(self.target_mongo_pass, safe='')
+
+            # Логируем для отладки (маскируем пароль)
+            logger.debug(f"Target MongoDB user: {self.target_mongo_user}")
+            logger.debug(f"Target MongoDB password contains + sign: {'+' in self.target_mongo_pass}")
+            logger.debug(f"Encoded password preview: {password[:3]}...{password[-3:] if len(password) > 6 else ''}")
 
             connection_string = (
                 f"mongodb://{user}:{password}@"
@@ -103,7 +137,15 @@ class Settings(BaseSettings):
                 connection_string += "/?" + "&".join(params)
 
         else:
+            # Если нет учетных данных, подключаемся без аутентификации
             connection_string = f"mongodb://{self.target_mongo_host}:{self.target_mongo_port}"
+
+            # Добавим предупреждение для отладки
+            logger.warning(
+                f"Target MongoDB connection without authentication. "
+                f"User: {'set' if self.target_mongo_user else 'not set'}, "
+                f"Pass: {'set' if self.target_mongo_pass else 'not set'}"
+            )
 
         return connection_string
 
