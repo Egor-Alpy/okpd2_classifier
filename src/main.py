@@ -66,6 +66,9 @@ async def root():
             "statistics": "/api/v1/stats",
             "statistics_stage2": "/api/v1/stats/stage2",
             "statistics_by_collection": "/api/v1/stats/by-source-collection",
-            "tender_classification": "/api/v1/tender/classify-tender"
+            "statistics_by_collection_stage2": "/api/v1/stats/stage2/by-source-collection",
+            "tender_classification": "/api/v1/tender/classify-tender",
+            "migration_start": "/api/v1/migration/start",
+            "migration_status": "/api/v1/migration/{job_id}"
         }
     }

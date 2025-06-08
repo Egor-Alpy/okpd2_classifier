@@ -123,7 +123,7 @@ async def get_statistics(
         target_store=Depends(get_target_store),
         api_key: str = Depends(verify_api_key)
 ):
-    """Получить статистику классификации"""
+    """Получить общую статистику классификации"""
     stats = await target_store.get_statistics()
 
     # Добавляем процентные показатели
@@ -141,6 +141,25 @@ async def get_statistics(
     return stats
 
 
+@router.get("/stats/by-source-collection")
+async def get_stats_by_source_collection(
+        target_store=Depends(get_target_store),
+        api_key: str = Depends(verify_api_key)
+):
+    """Получить статистику по исходным коллекциям"""
+    stats = await target_store.get_statistics_by_source_collection()
+
+    # Добавляем процентные показатели для каждой коллекции
+    for collection_name, collection_stats in stats.items():
+        total = collection_stats.get("total", 0)
+        if total > 0:
+            for status in ["pending", "processing", "classified", "none_classified", "failed"]:
+                count = collection_stats.get(status, 0)
+                collection_stats[f"{status}_percentage"] = round(count / total * 100, 2)
+
+    return stats
+
+
 @router.get("/stats/by-group")
 async def get_stats_by_group(
         target_store=Depends(get_target_store),
@@ -149,9 +168,9 @@ async def get_stats_by_group(
     """Получить статистику по группам ОКПД2"""
     pipeline = [
         {"$match": {"status_stage1": ProductStatus.CLASSIFIED.value}},
-        {"$unwind": "$okpd_group"},
+        {"$unwind": "$okpd_groups"},
         {"$group": {
-            "_id": "$okpd_group",
+            "_id": "$okpd_groups",
             "count": {"$sum": 1}
         }},
         {"$sort": {"_id": 1}}
@@ -169,6 +188,7 @@ async def get_stats_by_group(
 @router.get("/products/sample")
 async def get_sample_products(
         status: Optional[str] = None,
+        source_collection: Optional[str] = None,
         limit: int = 10,
         target_store=Depends(get_target_store),
         api_key: str = Depends(verify_api_key)
@@ -177,6 +197,8 @@ async def get_sample_products(
     query = {}
     if status:
         query["status_stage1"] = status
+    if source_collection:
+        query["source_collection"] = source_collection
 
     cursor = target_store.products.find(query).limit(limit)
     products = await cursor.to_list(length=limit)

@@ -10,7 +10,6 @@ from src.services.ai_client import AnthropicClient
 from src.services.ai_client_stage2 import PromptBuilderStage2
 from src.storage.target_mongo import TargetMongoStore
 from src.models.domain import ProductStatus
-from src.models.domain_stage2 import ProductStatusStage2
 
 logger = logging.getLogger(__name__)
 
@@ -82,7 +81,7 @@ class StageTwoClassifier:
 
                     # Получаем кэшированный контент для групп товаров
                     # Берем группы первого товара (они должны быть из одного класса)
-                    sample_groups = class_products[0].get("okpd_group", [])
+                    sample_groups = class_products[0].get("okpd_groups", [])
                     cached_content = self.prompt_builder.get_cached_content_for_groups(sample_groups)
 
                     if not cached_content:
@@ -152,7 +151,7 @@ class StageTwoClassifier:
         products_by_class = {}
 
         for product in products:
-            okpd_groups = product.get("okpd_group", [])
+            okpd_groups = product.get("okpd_groups", [])
             if okpd_groups:
                 # Берем класс из первой группы
                 main_class = okpd_groups[0][:2]
@@ -193,7 +192,6 @@ class StageTwoClassifier:
     ):
         """Обновить товары с результатами второго этапа"""
         updates = []
-        current_time = datetime.utcnow()
 
         for product in products:
             product_id = product["_id"]
@@ -209,11 +207,10 @@ class StageTwoClassifier:
                 updates.append({
                     "_id": product_id,
                     "data": {
-                        "status_stage2": ProductStatusStage2.CLASSIFIED.value,
+                        "status_stage2": ProductStatus.CLASSIFIED.value,
                         "okpd2_code": code,
                         "okpd2_name": code_name,
-                        "stage2_completed_at": current_time,
-                        "stage2_batch_id": self.worker_id
+                        "worker_id": self.worker_id
                     }
                 })
                 logger.debug(f"Product {product_id} classified with exact code: {code}")
@@ -222,8 +219,8 @@ class StageTwoClassifier:
                 updates.append({
                     "_id": product_id,
                     "data": {
-                        "status_stage2": ProductStatusStage2.NONE_CLASSIFIED.value,
-                        "stage2_completed_at": current_time
+                        "status_stage2": ProductStatus.NONE_CLASSIFIED.value,
+                        "worker_id": self.worker_id
                     }
                 })
                 logger.debug(f"Product {product_id} not classified in stage 2")
@@ -234,14 +231,13 @@ class StageTwoClassifier:
     async def _mark_products_failed(self, product_ids: List[Any]):
         """Пометить товары как failed для второго этапа"""
         updates = []
-        current_time = datetime.utcnow()
 
         for product_id in product_ids:
             updates.append({
                 "_id": product_id,
                 "data": {
-                    "status_stage2": ProductStatusStage2.FAILED.value,
-                    "stage2_completed_at": current_time
+                    "status_stage2": ProductStatus.FAILED.value,
+                    "worker_id": self.worker_id
                 }
             })
 
@@ -257,17 +253,16 @@ class StageTwoClassifier:
             doc = await self.target_store.products.find_one_and_update(
                 {
                     "status_stage1": ProductStatus.CLASSIFIED.value,
-                    "okpd_group": {"$exists": True, "$ne": []},
+                    "okpd_groups": {"$exists": True, "$ne": []},
                     "$or": [
                         {"status_stage2": {"$exists": False}},
-                        {"status_stage2": ProductStatusStage2.PENDING.value}
+                        {"status_stage2": ProductStatus.PENDING.value}
                     ]
                 },
                 {
                     "$set": {
-                        "status_stage2": ProductStatusStage2.PROCESSING.value,
-                        "stage2_started_at": datetime.utcnow(),
-                        "stage2_worker_id": self.worker_id
+                        "status_stage2": ProductStatus.PROCESSING.value,
+                        "worker_id": self.worker_id
                     }
                 },
                 return_document=True

@@ -12,14 +12,19 @@ class ProductStatus(str, Enum):
     FAILED = "failed"
 
 
-class ProductStageOne(BaseModel):
-    """Модель товара для первого этапа классификации"""
-    collection_name: str = Field(..., description="Название коллекции БД откуда взяли товар")
-    old_mongo_id: str = Field(..., description="Mongo ID товара который мы взяли")
+class Product(BaseModel):
+    """Модель товара в целевой БД"""
     title: str = Field(..., description="Наименование товара")
-    okpd_group: Optional[List[str]] = Field(None, description="Массив 5-значных групп ОКПД2 (формат XX.XX.X)")
-    status_stage1: ProductStatus = Field(ProductStatus.PENDING, description="Статус классификации первого этапа")
-    created_at: datetime = Field(default_factory=datetime.utcnow, description="Когда начали классификацию")
+    created_at: datetime = Field(default_factory=datetime.utcnow, description="Время создания записи")
+    okpd2_code: Optional[str] = Field(None, description="Точный код ОКПД2")
+    okpd2_name: Optional[str] = Field(None, description="Название по ОКПД2")
+    okpd_groups: Optional[List[str]] = Field(None, description="Массив групп ОКПД2 (5-значные коды)")
+    processed_at: Optional[datetime] = Field(None, description="Время завершения классификации")
+    source_collection: str = Field(..., description="Название исходной коллекции")
+    source_id: str = Field(..., description="ID товара в исходной коллекции")
+    status_stage1: ProductStatus = Field(ProductStatus.PENDING, description="Статус первого этапа")
+    status_stage2: Optional[ProductStatus] = Field(None, description="Статус второго этапа")
+    worker_id: Optional[str] = Field(None, description="ID воркера, обработавшего товар")
 
     class Config:
         use_enum_values = True

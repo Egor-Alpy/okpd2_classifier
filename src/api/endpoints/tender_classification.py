@@ -108,7 +108,7 @@ async def classify_tender(
                     # Находим товар и добавляем группы
                     for item in items_to_classify:
                         if item["_id"] == internal_id:
-                            item["okpd_groups"] = groups
+                            item["okpd_groups"] = groups  # Используем новое имя поля
                             items_for_stage2.append(item)
                             break
                 else:
@@ -141,7 +141,8 @@ async def classify_tender(
                             failed_count += 1
                 else:
                     # Товары без точного кода тоже считаем failed
-                    for internal_id in items_for_stage2:
+                    for item in items_for_stage2:
+                        internal_id = item["_id"]
                         if internal_id not in stage2_result["results"]:
                             failed_count += 1
 

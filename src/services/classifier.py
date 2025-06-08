@@ -21,12 +21,14 @@ class StageOneClassifier:
             ai_client: AnthropicClient,
             target_store: TargetMongoStore,
             batch_size: int = 300,
-            worker_id: str = None
+            worker_id: str = None,
+            collection_name: str = None
     ):
         self.ai_client = ai_client
         self.target_store = target_store
         self.batch_size = batch_size
         self.worker_id = worker_id or f"worker_{uuid.uuid4().hex[:8]}"
+        self.collection_name = collection_name
         self.prompt_builder = PromptBuilder()
 
         # Получаем кэшируемый контент один раз
@@ -225,7 +227,8 @@ class StageOneClassifier:
                     "_id": product_id,
                     "data": {
                         "status_stage1": ProductStatus.CLASSIFIED.value,
-                        "okpd_group": results[product_id]
+                        "okpd_group": results[product_id],  # В bulk_update переименуется в okpd_groups
+                        "worker_id": self.worker_id
                     }
                 })
                 logger.debug(f"Product {product_id} classified with groups: {results[product_id]}")
@@ -234,7 +237,8 @@ class StageOneClassifier:
                 updates.append({
                     "_id": product_id,
                     "data": {
-                        "status_stage1": ProductStatus.NONE_CLASSIFIED.value
+                        "status_stage1": ProductStatus.NONE_CLASSIFIED.value,
+                        "worker_id": self.worker_id
                     }
                 })
                 logger.debug(f"Product {product_id} not classified")
@@ -249,7 +253,8 @@ class StageOneClassifier:
             updates.append({
                 "_id": product_id,
                 "data": {
-                    "status_stage1": ProductStatus.FAILED.value
+                    "status_stage1": ProductStatus.FAILED.value,
+                    "worker_id": self.worker_id
                 }
             })
 
@@ -259,7 +264,7 @@ class StageOneClassifier:
     async def run_continuous_classification(self):
         """Запустить непрерывную классификацию"""
         logger.info(f"Starting continuous classification for worker {self.worker_id}...")
-        logger.info(f"Using prompt caching with Claude 3.7 Sonnet")
+        logger.info(f"Using prompt caching with Claude 3.5 Sonnet")
 
         first_batch = True
         consecutive_timeouts = 0
