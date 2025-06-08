@@ -21,14 +21,12 @@ class StageOneClassifier:
             ai_client: AnthropicClient,
             target_store: TargetMongoStore,
             batch_size: int = 300,
-            worker_id: str = None,
-            collection_name: str = None
+            worker_id: str = None
     ):
         self.ai_client = ai_client
         self.target_store = target_store
         self.batch_size = batch_size
         self.worker_id = worker_id or f"worker_{uuid.uuid4().hex[:8]}"
-        self.collection_name = collection_name
         self.prompt_builder = PromptBuilder()
 
         # Получаем кэшируемый контент один раз
@@ -46,9 +44,6 @@ class StageOneClassifier:
         logger.info(f"Classifier initialized with batch_size={batch_size}, "
                     f"rate_limit_delay={self.rate_limit_delay}s, "
                     f"max_retries={self.max_retries}")
-
-        if collection_name:
-            logger.info(f"Classifier will process only collection: {collection_name}")
 
     async def process_batch(self, products: List[Dict[str, Any]]) -> Dict[str, Any]:
         """Обработать батч товаров с использованием кэша"""
@@ -80,8 +75,7 @@ class StageOneClassifier:
 
                 for product in products:
                     product_id = product["_id"]
-                    # Создаем расширенное название товара с учетом дополнительных полей
-                    product_name = self._build_product_name(product)
+                    product_name = product["title"]
                     product_map[product_name] = product_id
                     product_names.append(product_name)
 
@@ -123,31 +117,78 @@ class StageOneClassifier:
             except Exception as e:
                 error_str = str(e)
 
-                # Обработка различных типов ошибок (таймауты, rate limits и т.д.)
+                # Проверяем таймаут
                 if "timeout" in error_str.lower() or "timed out" in error_str.lower():
                     retry_count += 1
+
                     if retry_count < self.max_retries:
+                        # Уменьшаем размер батча для следующей попытки
+                        reduced_batch_size = max(1, len(products) // 2)
                         wait_time = 10 * retry_count
-                        logger.warning(f"Request timeout. Retry {retry_count}/{self.max_retries} after {wait_time}s")
+
+                        logger.warning(
+                            f"Request timeout for batch {batch_id}. "
+                            f"Retry {retry_count}/{self.max_retries} after {wait_time}s delay. "
+                            f"Consider reducing batch size from {len(products)} to {reduced_batch_size}"
+                        )
+
+                        await asyncio.sleep(wait_time)
+
+                        # Если это последняя попытка, обрабатываем меньшими батчами
+                        if retry_count == self.max_retries - 1 and len(products) > 10:
+                            logger.info(f"Splitting batch into smaller parts...")
+                            mid = len(products) // 2
+
+                            # Обрабатываем первую половину
+                            first_half = await self.process_batch(products[:mid])
+
+                            # Обрабатываем вторую половину
+                            second_half = await self.process_batch(products[mid:])
+
+                            # Объединяем результаты
+                            combined_results = {**first_half.get("results", {}), **second_half.get("results", {})}
+
+                            return {
+                                "batch_id": batch_id,
+                                "total": len(products),
+                                "classified": first_half["classified"] + second_half["classified"],
+                                "none_classified": first_half["none_classified"] + second_half["none_classified"],
+                                "results": combined_results
+                            }
+
+                        continue
+
+                # Проверяем rate limit
+                elif "429" in error_str or "rate_limit_error" in error_str:
+                    retry_count += 1
+
+                    if retry_count < self.max_retries:
+                        wait_time = 30 * (2 ** (retry_count - 1))
+                        logger.warning(
+                            f"Rate limit hit for batch {batch_id}. "
+                            f"Retry {retry_count}/{self.max_retries} after {wait_time}s delay."
+                        )
                         await asyncio.sleep(wait_time)
                         continue
 
-                elif "429" in error_str or "rate_limit_error" in error_str:
+                # Проверяем overloaded error (529)
+                elif "529" in error_str or "overloaded_error" in error_str:
                     retry_count += 1
-                    if retry_count < self.max_retries:
-                        wait_time = 30 * (2 ** (retry_count - 1))
-                        logger.warning(f"Rate limit hit. Retry {retry_count}/{self.max_retries} after {wait_time}s")
+
+                    if retry_count < self.max_retries + 2:  # Даем больше попыток для 529
+                        wait_time = 60 * retry_count  # Увеличиваем задержку для перегрузки
+                        logger.warning(
+                            f"API overloaded (529) for batch {batch_id}. "
+                            f"Retry {retry_count}/{self.max_retries + 2} after {wait_time}s delay."
+                        )
                         await asyncio.sleep(wait_time)
                         continue
 
                 logger.error(f"Error processing batch {batch_id}: {e}")
+
+                # Помечаем все товары как failed
                 await self._mark_products_failed(product_ids)
                 raise
-
-    def _build_product_name(self, product: Dict[str, Any]) -> str:
-        """Построить название товара для классификации"""
-        # Просто возвращаем title, так как теперь только он есть в БД
-        return product.get("title", "")
 
     async def _refresh_cache_if_needed(self):
         """Обновить кэш если прошло больше 4 минут"""
@@ -184,7 +225,7 @@ class StageOneClassifier:
                     "_id": product_id,
                     "data": {
                         "status_stage1": ProductStatus.CLASSIFIED.value,
-                        "okpd_groups": results[product_id]
+                        "okpd_group": results[product_id]
                     }
                 })
                 logger.debug(f"Product {product_id} classified with groups: {results[product_id]}")
@@ -218,10 +259,7 @@ class StageOneClassifier:
     async def run_continuous_classification(self):
         """Запустить непрерывную классификацию"""
         logger.info(f"Starting continuous classification for worker {self.worker_id}...")
-        logger.info(f"Using prompt caching with Claude 3.5 Sonnet")
-
-        if self.collection_name:
-            logger.info(f"Processing only collection: {self.collection_name}")
+        logger.info(f"Using prompt caching with Claude 3.7 Sonnet")
 
         first_batch = True
         consecutive_timeouts = 0
@@ -231,16 +269,15 @@ class StageOneClassifier:
             batch_size = 1 if first_batch else current_batch_size
 
             try:
-                # Получаем pending товары атомарно с фильтрацией по коллекции
-                products = await self.target_store.get_pending_products_atomic_by_collection(
+                # Получаем pending товары атомарно
+                products = await self.target_store.get_pending_products_atomic(
                     batch_size,
-                    self.worker_id,
-                    self.collection_name
+                    self.worker_id
                 )
                 first_batch = False
 
                 if not products:
-                    logger.info(f"Worker {self.worker_id}: No pending products in {self.collection_name}, waiting...")
+                    logger.info(f"Worker {self.worker_id}: No pending products, waiting...")
                     await asyncio.sleep(10)
 
                     # Обновляем кэш даже во время простоя

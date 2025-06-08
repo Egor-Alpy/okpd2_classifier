@@ -23,15 +23,12 @@ logger = logging.getLogger(__name__)
 class ClassificationWorkerStage2:
     """Воркер для классификации товаров на втором этапе"""
 
-    def __init__(self, worker_id: str = "stage2_worker_1", collection_name: str = None):
+    def __init__(self, worker_id: str = "stage2_worker_1"):
         self.worker_id = worker_id
-        self.collection_name = collection_name
         self.target_store = None
         self.classifier = None
         self.running = False
         logger.info(f"Initializing stage 2 classification worker: {self.worker_id}")
-        if collection_name:
-            logger.info(f"Worker will process only collection: {collection_name}")
 
     async def start(self):
         """Запустить воркер"""
@@ -40,32 +37,21 @@ class ClassificationWorkerStage2:
         try:
             # Инициализируем компоненты
             logger.info("Connecting to target MongoDB...")
-            self.target_store = TargetMongoStore(
-                settings.target_mongodb_database,
-                settings.target_collection_name
-            )
+            self.target_store = TargetMongoStore(settings.target_mongodb_database)
 
             # Инициализируем target store
             logger.info("Initializing target store...")
             await self.target_store.initialize()
 
-            # Формируем запрос для проверки товаров
-            # FIXED: Using correct field names that match the actual database
-            query = {
-                "status_stage1": "classified",  # Changed from status_stg1
-                "okpd_groups": {"$exists": True, "$ne": []},
+            # Проверяем наличие товаров для второго этапа
+            count = await self.target_store.products.count_documents({
+                "status_stage1": "classified",
+                "okpd_group": {"$exists": True, "$ne": []},
                 "$or": [
-                    {"status_stage2": {"$exists": False}},  # Changed from status_stg2
+                    {"status_stage2": {"$exists": False}},
                     {"status_stage2": "pending"}
                 ]
-            }
-
-            if self.collection_name:
-                query["source_collection"] = self.collection_name  # Changed from collection_name
-                logger.info(f"Checking products for collection: {self.collection_name}")
-
-            # Проверяем наличие товаров для второго этапа
-            count = await self.target_store.products.count_documents(query)
+            })
             logger.info(f"Found {count} products ready for stage 2 classification")
 
             if count == 0:
@@ -83,20 +69,14 @@ class ClassificationWorkerStage2:
             )
 
             # Используем меньший размер батча для второго этапа
-            # Но если в настройках уже указан маленький размер, используем его
-            default_stage2_batch = 15
-            if hasattr(settings, 'classification_batch_size') and settings.classification_batch_size > 0:
-                batch_size = min(settings.classification_batch_size, default_stage2_batch)
-            else:
-                batch_size = default_stage2_batch
+            batch_size = min(settings.classification_batch_size, 15)
 
             logger.info(f"Creating stage 2 classifier with batch_size={batch_size}")
             self.classifier = StageTwoClassifier(
                 ai_client,
                 self.target_store,
                 batch_size,
-                worker_id=self.worker_id,
-                collection_name=self.collection_name
+                worker_id=self.worker_id
             )
 
             # Проверяем наличие файла с полным деревом ОКПД2
@@ -140,17 +120,10 @@ async def main():
 
     parser = argparse.ArgumentParser(description='Stage 2 Classification worker')
     parser.add_argument('--worker-id', default='stage2_worker_1', help='Worker ID')
-    parser.add_argument('--collection', default=None, help='Process only specific collection')
     parser.add_argument('--log-level', default='INFO',
                         choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'],
                         help='Logging level')
     args = parser.parse_args()
-
-    # Определяем collection_name с учетом приоритетов
-    collection_name = args.collection
-    if collection_name is None and settings.source_collection_name:
-        collection_name = settings.source_collection_name
-        logger.info(f"Using collection from env: {collection_name}")
 
     # Настройка уровня логирования из аргументов
     log_level = getattr(logging, args.log_level.upper())
@@ -163,7 +136,6 @@ async def main():
     logger.info("OKPD2 Stage 2 Classification Worker Starting")
     logger.info("=" * 60)
     logger.info(f"Worker ID: {args.worker_id}")
-    logger.info(f"Collection: {collection_name or 'ALL'}")
     logger.info(f"Log Level: {args.log_level}")
     logger.info(f"Batch Size: {min(settings.classification_batch_size, 15)}")
     logger.info(f"Rate Limit Delay: {settings.rate_limit_delay}s")
@@ -173,7 +145,7 @@ async def main():
     logger.info("=" * 60)
 
     try:
-        worker = ClassificationWorkerStage2(args.worker_id, collection_name)
+        worker = ClassificationWorkerStage2(args.worker_id)
         await worker.start()
     except KeyboardInterrupt:
         logger.info("Shutdown requested by user")
