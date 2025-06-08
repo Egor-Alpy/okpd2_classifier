@@ -37,7 +37,10 @@ class ClassificationWorkerStage2:
         try:
             # Инициализируем компоненты
             logger.info("Connecting to target MongoDB...")
-            self.target_store = TargetMongoStore(settings.target_mongodb_database)
+            self.target_store = TargetMongoStore(
+                settings.target_mongodb_database,
+                settings.target_collection_name
+            )
 
             # Инициализируем target store
             logger.info("Initializing target store...")
@@ -46,7 +49,7 @@ class ClassificationWorkerStage2:
             # Проверяем наличие товаров для второго этапа
             count = await self.target_store.products.count_documents({
                 "status_stage1": "classified",
-                "okpd_group": {"$exists": True, "$ne": []},
+                "okpd_groups": {"$exists": True, "$ne": []},  # ✅ ИСПРАВЛЕНО
                 "$or": [
                     {"status_stage2": {"$exists": False}},
                     {"status_stage2": "pending"}
