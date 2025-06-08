@@ -212,7 +212,7 @@ class StageTwoClassifier:
                 updates.append({
                     "_id": product_id,
                     "data": {
-                        "status_stg2": ProductStatusStage2.CLASSIFIED.value,
+                        "status_stg2": "classified",  # Используем упрощенное значение
                         "okpd2_code": code,
                         "okpd2_name": code_name
                     }
@@ -223,7 +223,7 @@ class StageTwoClassifier:
                 updates.append({
                     "_id": product_id,
                     "data": {
-                        "status_stg2": ProductStatusStage2.NONE_CLASSIFIED.value
+                        "status_stg2": "none_classified"  # Используем упрощенное значение
                     }
                 })
                 logger.debug(f"Product {product_id} not classified in stage 2")
@@ -239,7 +239,7 @@ class StageTwoClassifier:
             updates.append({
                 "_id": product_id,
                 "data": {
-                    "status_stg2": ProductStatusStage2.FAILED.value
+                    "status_stg2": "failed"  # Используем упрощенное значение
                 }
             })
 
@@ -250,25 +250,25 @@ class StageTwoClassifier:
         """Получить батч pending товаров для второго этапа"""
         products = []
 
-        # Базовый фильтр
+        # Базовый фильтр (используем существующие имена полей)
         filter_query = {
-            "status_stg1": ProductStatus.CLASSIFIED.value,
+            "status_stage1": "classified",
             "okpd_groups": {"$exists": True, "$ne": []},
             "$or": [
-                {"status_stg2": {"$exists": False}},
-                {"status_stg2": ProductStatusStage2.PENDING.value}
+                {"status_stage2": {"$exists": False}},
+                {"status_stage2": "pending"}
             ]
         }
 
         # Добавляем фильтр по коллекции если указана
         if self.collection_name:
-            filter_query["collection_name"] = self.collection_name
+            filter_query["source_collection"] = self.collection_name
 
         # Атомарно получаем и блокируем товары
         for _ in range(limit):
             doc = await self.target_store.products.find_one_and_update(
                 filter_query,
-                {"$set": {"status_stg2": ProductStatusStage2.PROCESSING.value}},
+                {"$set": {"status_stage2": "processing"}},
                 return_document=True
             )
 

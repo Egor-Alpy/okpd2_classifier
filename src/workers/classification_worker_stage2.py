@@ -82,7 +82,12 @@ class ClassificationWorkerStage2:
             )
 
             # Используем меньший размер батча для второго этапа
-            batch_size = min(settings.classification_batch_size, 15)
+            # Но если в настройках уже указан маленький размер, используем его
+            default_stage2_batch = 15
+            if hasattr(settings, 'classification_batch_size') and settings.classification_batch_size > 0:
+                batch_size = min(settings.classification_batch_size, default_stage2_batch)
+            else:
+                batch_size = default_stage2_batch
 
             logger.info(f"Creating stage 2 classifier with batch_size={batch_size}")
             self.classifier = StageTwoClassifier(

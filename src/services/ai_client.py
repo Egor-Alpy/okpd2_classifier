@@ -132,7 +132,7 @@ class PromptBuilder:
     """Построитель промптов для классификации с поддержкой кэширования"""
 
     # Путь к файлу со списком групп ОКПД2 (сокращенный)
-    OKPD2_GROUPS_PATH = "src/data/okpd2_5digit_groups_optimized.txt"
+    OKPD2_GROUPS_PATH = "src/data/okpd2_5digit_groups.txt"
 
     def __init__(self):
         self._okpd2_groups = None

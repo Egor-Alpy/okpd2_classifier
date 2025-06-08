@@ -30,11 +30,15 @@ class TargetMongoStore:
         logger.info(f"Connecting to Target MongoDB...")
         logger.info(f"Database: {database_name}, Collection: {collection_name}")
 
+        # Добавляем параметры подключения для лучшей совместимости
         self.client = AsyncIOMotorClient(
             connection_string,
             directConnection=settings.target_mongo_direct_connection,
-            serverSelectionTimeoutMS=5000,
-            connectTimeoutMS=5000
+            serverSelectionTimeoutMS=10000,  # Увеличиваем таймаут
+            connectTimeoutMS=10000,
+            socketTimeoutMS=10000,
+            # Явно указываем механизм аутентификации если он задан
+            authMechanism=settings.target_mongo_authmechanism if settings.target_mongo_user else None
         )
         self.db: AsyncIOMotorDatabase = self.client[database_name]
         self.products = self.db[collection_name]
@@ -50,40 +54,57 @@ class TargetMongoStore:
     async def test_connection(self) -> bool:
         """Проверить подключение к БД"""
         try:
-            await self.client.admin.command('ping')
+            # Пробуем выполнить простую операцию на нашей БД, а не admin
+            await self.db.command('ping')
             logger.info(f"Successfully connected to target MongoDB")
             return True
         except Exception as e:
             logger.error(f"Failed to connect to target MongoDB: {e}")
+            # Дополнительная отладка
+            logger.error(
+                f"Connection string (masked): mongodb://***:***@{settings.target_mongo_host}:{settings.target_mongo_port}")
+            logger.error(f"Database: {self.db.name}")
+            logger.error(f"Auth source: {settings.target_mongo_authsource}")
             return False
 
     async def _setup_indexes(self):
         """Создать необходимые индексы"""
         try:
-            # Уникальный составной индекс
-            await self.products.create_index(
-                [("old_mongo_id", 1), ("collection_name", 1)],
-                unique=True
-            )
+            # Проверяем существующие индексы
+            existing_indexes = await self.products.list_indexes().to_list(length=None)
+            existing_names = {idx['name'] for idx in existing_indexes}
 
-            # Индексы для поиска
-            await self.products.create_index("status_stg1")
-            await self.products.create_index("created_at")
-            await self.products.create_index("okpd_group")
-            await self.products.create_index("status_stg2")  # Добавлен индекс для второго этапа
-            await self.products.create_index("collection_name")  # Индекс для фильтрации по коллекции
+            # Создаем только недостающие индексы
+            # Уникальный составной индекс (используем существующее имя)
+            if 'source_id_1_source_collection_1' not in existing_names:
+                await self.products.create_index(
+                    [("source_id", 1), ("source_collection", 1)],
+                    unique=True
+                )
+
+            # Индексы для поиска (используем существующие имена полей)
+            if 'status_stage1_1' not in existing_names:
+                await self.products.create_index("status_stage1")
+            if 'created_at_1' not in existing_names:
+                await self.products.create_index("created_at")
+            if 'okpd_groups_1' not in existing_names:
+                await self.products.create_index("okpd_groups")
+            if 'status_stage2_1' not in existing_names:
+                await self.products.create_index("status_stage2")
+            if 'source_collection_1' not in existing_names:
+                await self.products.create_index("source_collection")
 
             # Индекс для migration_jobs
             await self.migration_jobs.create_index("job_id", unique=True)
 
-            logger.info("MongoDB indexes created successfully")
+            logger.info("MongoDB indexes created/verified successfully")
         except Exception as e:
             logger.warning(f"Error creating indexes (may already exist): {e}")
 
     async def insert_products_batch(self, products: List[Dict[str, Any]], collection_name: str) -> int:
         """
         Вставить батч товаров в целевую БД
-        Схема: collection_name, old_mongo_id, title, okpd_group, status_stg1, created_at
+        Используем существующую схему: source_collection, source_id, title, okpd_groups, status_stage1, created_at
         """
         if not products:
             return 0
@@ -91,14 +112,18 @@ class TargetMongoStore:
         documents = []
         for product in products:
             doc = {
-                "collection_name": collection_name,
-                "old_mongo_id": product["_id"],
+                "source_collection": collection_name,  # Используем существующее имя поля
+                "source_id": product["_id"],  # Используем существующее имя поля
                 "title": product["title"],
-                "okpd_group": None,
-                "status_stg1": ProductStatus.PENDING.value,
+                "okpd_groups": None,  # Используем существующее имя поля
+                "status_stage1": "pending",  # Используем существующее имя поля
                 "created_at": datetime.utcnow()
             }
             documents.append(doc)
+
+        # Логируем первый документ для отладки
+        if documents:
+            logger.debug(f"Sample document to insert: {documents[0]}")
 
         try:
             result = await self.products.insert_many(documents, ordered=False)
@@ -110,6 +135,11 @@ class TargetMongoStore:
             write_errors = e.details.get('writeErrors', [])
             duplicate_count = sum(1 for error in write_errors if error['code'] == 11000)
             inserted_count = e.details.get('nInserted', 0)
+
+            # Логируем пример ошибки дубликата
+            if write_errors and duplicate_count > 0:
+                sample_error = write_errors[0]
+                logger.debug(f"Sample duplicate error: {sample_error}")
 
             logger.warning(
                 f"Batch insert completed with {inserted_count} inserted, "
@@ -124,7 +154,7 @@ class TargetMongoStore:
     async def get_pending_products(self, limit: int = 50) -> List[Dict[str, Any]]:
         """Получить товары для классификации"""
         cursor = self.products.find(
-            {"status_stg1": ProductStatus.PENDING.value}
+            {"status_stage1": "pending"}
         ).limit(limit)
         return await cursor.to_list(length=limit)
 
@@ -134,8 +164,8 @@ class TargetMongoStore:
 
         for _ in range(limit):
             doc = await self.products.find_one_and_update(
-                {"status_stg1": ProductStatus.PENDING.value},
-                {"$set": {"status_stg1": ProductStatus.PROCESSING.value}},
+                {"status_stage1": "pending"},
+                {"$set": {"status_stage1": "processing"}},
                 return_document=True
             )
 
@@ -158,18 +188,18 @@ class TargetMongoStore:
         """Атомарно получить и заблокировать товары для классификации с фильтрацией по коллекции"""
         products = []
 
-        # Базовый фильтр
-        filter_query = {"status_stg1": ProductStatus.PENDING.value}
+        # Базовый фильтр (используем существующие имена полей)
+        filter_query = {"status_stage1": "pending"}
 
         # Добавляем фильтр по коллекции если указана
         if collection_name:
-            filter_query["collection_name"] = collection_name
+            filter_query["source_collection"] = collection_name
             logger.info(f"Filtering products by collection: {collection_name}")
 
         for _ in range(limit):
             doc = await self.products.find_one_and_update(
                 filter_query,
-                {"$set": {"status_stg1": ProductStatus.PROCESSING.value}},
+                {"$set": {"status_stage1": "processing"}},
                 return_document=True
             )
 
@@ -184,7 +214,7 @@ class TargetMongoStore:
         return products
 
     async def bulk_update_products(self, updates: List[Dict[str, Any]]):
-        """Массовое обновление товаров"""
+        """Массовое обновление товаров (адаптировано под существующую схему)"""
         if not updates:
             return
 
@@ -202,29 +232,26 @@ class TargetMongoStore:
                     logger.error(f"Invalid product_id: {product_id}")
                     continue
 
-                # Обновляем ТОЛЬКО разрешенные поля
+                # Обновляем с учетом существующей схемы
                 update_data = {}
                 data = update.get("data", {})
 
-                # Поля первого этапа
-                if "status_stg1" in data:
-                    update_data["status_stg1"] = data["status_stg1"]
+                # Мапинг полей: новые имена -> существующие в БД
+                field_mapping = {
+                    "status_stg1": "status_stage1",
+                    "status_stg2": "status_stage2",
+                    "okpd_groups": "okpd_groups",  # Это поле уже правильное
+                    "okpd2_code": "okpd2_code",
+                    "okpd2_name": "okpd2_name"
+                }
 
-                if "okpd_groups" in data:
-                    update_data["okpd_groups"] = data["okpd_groups"]
+                for new_field, db_field in field_mapping.items():
+                    if new_field in data:
+                        update_data[db_field] = data[new_field]
 
-                # Поля второго этапа
-                if "status_stg2" in data:
-                    update_data["status_stg2"] = data["status_stg2"]
-
-                if "okpd2_code" in data:
-                    update_data["okpd2_code"] = data["okpd2_code"]
-
-                if "okpd2_name" in data:
-                    update_data["okpd2_name"] = data["okpd2_name"]
-
-                operation = UpdateOne(filter_query, {"$set": update_data})
-                bulk_operations.append(operation)
+                if update_data:
+                    operation = UpdateOne(filter_query, {"$set": update_data})
+                    bulk_operations.append(operation)
 
             except Exception as e:
                 logger.error(f"Error preparing bulk operation: {e}")
@@ -239,13 +266,15 @@ class TargetMongoStore:
                 raise
 
     async def get_statistics(self) -> Dict[str, int]:
-        """Получить статистику по товарам"""
+        """Получить статистику по товарам (используя существующую схему)"""
         total = await self.products.count_documents({})
-        pending = await self.products.count_documents({"status_stg1": ProductStatus.PENDING.value})
-        processing = await self.products.count_documents({"status_stg1": ProductStatus.PROCESSING.value})
-        classified = await self.products.count_documents({"status_stg1": ProductStatus.CLASSIFIED.value})
-        none_classified = await self.products.count_documents({"status_stg1": ProductStatus.NONE_CLASSIFIED.value})
-        failed = await self.products.count_documents({"status_stg1": ProductStatus.FAILED.value})
+
+        # Используем существующие имена полей
+        pending = await self.products.count_documents({"status_stage1": "pending"})
+        processing = await self.products.count_documents({"status_stage1": "processing"})
+        classified = await self.products.count_documents({"status_stage1": "classified"})
+        none_classified = await self.products.count_documents({"status_stage1": "none_classified"})
+        failed = await self.products.count_documents({"status_stage1": "failed"})
 
         return {
             "total": total,

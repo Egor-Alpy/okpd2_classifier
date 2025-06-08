@@ -13,56 +13,62 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
-@router.post("/classify-positions")
-async def classify_tender_positions(
-        positions: List[Dict[str, Any]],
+@router.post("/classify-tender")
+async def classify_tender(
+        tender_data: Dict[str, Any],
         api_key: str = Depends(verify_api_key)
 ):
     """
-    Классифицировать позиции тендера по ОКПД2
+    Классифицировать товары тендера по ОКПД2
 
-    Принимает список позиций в формате:
-    [
-        {
-            "id": "position_id",
-            "title": "Наименование товара"
-        },
-        ...
-    ]
-
-    Возвращает:
-    {
-        "position_id": {
-            "okpd_groups": ["XX.XX.X", ...],
-            "okpd2_code": "XX.XX.XX.XXX",
-            "okpd2_name": "Название по ОКПД2"
-        },
-        ...
-    }
+    Принимает полный JSON тендера, классифицирует товары без кода ОКПД2
+    и возвращает обновленный JSON с добавленными кодами.
     """
     try:
-        if not positions:
-            raise HTTPException(status_code=400, detail="No positions provided")
+        if not tender_data or "items" not in tender_data:
+            raise HTTPException(status_code=400, detail="Invalid tender data format")
 
-        logger.info(f"Received {len(positions)} positions for classification")
+        items = tender_data.get("items", [])
+        if not items:
+            raise HTTPException(status_code=400, detail="No items found in tender")
 
-        # Подготавливаем данные для классификации
+        logger.info(f"Received tender with {len(items)} items for classification")
+
+        # Фильтруем товары для классификации
         items_to_classify = []
-        id_mapping = {}
+        item_indices = {}  # Мапинг внутренних ID на индексы в исходном массиве
 
-        for pos in positions:
-            if "id" not in pos or "title" not in pos:
-                raise HTTPException(
-                    status_code=400,
-                    detail="Each position must have 'id' and 'title' fields"
-                )
+        for idx, item in enumerate(items):
+            # Пропускаем товары, у которых уже есть код ОКПД2
+            if item.get("okpd2Code") and item.get("okpd2Code") != "":
+                logger.info(f"Item {item.get('id', idx)} already has OKPD2 code, skipping")
+                continue
+
+            # Проверяем наличие названия товара
+            if not item.get("name"):
+                logger.warning(f"Item {item.get('id', idx)} has no name, skipping")
+                continue
 
             internal_id = str(uuid.uuid4())
             items_to_classify.append({
                 "_id": internal_id,
-                "title": pos["title"]
+                "title": item["name"]
             })
-            id_mapping[internal_id] = pos["id"]
+            item_indices[internal_id] = idx
+
+        if not items_to_classify:
+            logger.info("All items already have OKPD2 codes")
+            return {
+                "tender": tender_data,
+                "statistics": {
+                    "total": len(items),
+                    "already_classified": len(items),
+                    "newly_classified": 0,
+                    "failed": 0
+                }
+            }
+
+        logger.info(f"Found {len(items_to_classify)} items without OKPD2 codes")
 
         # Инициализируем AI клиент
         ai_client = AnthropicClient(
@@ -80,78 +86,88 @@ async def classify_tender_positions(
 
         mock_store = MockStore()
 
-        # Первый этап - определение топ-5 групп
-        classifier_stage1 = StageOneClassifier(
-            ai_client,
-            mock_store,
-            batch_size=min(50, len(items_to_classify))
-        )
+        # Классифицируем только если есть товары без кодов
+        classified_count = 0
+        failed_count = 0
 
-        logger.info("Starting stage 1 classification...")
-        stage1_result = await classifier_stage1.process_batch(items_to_classify)
-
-        # Подготовка результатов
-        results = {}
-
-        # Обновляем товары с группами для второго этапа
-        items_for_stage2 = []
-        for internal_id, groups in stage1_result["results"].items():
-            original_id = id_mapping[internal_id]
-            results[original_id] = {
-                "okpd_groups": groups,
-                "okpd2_code": None,
-                "okpd2_name": None
-            }
-
-            if groups and len(groups) > 0:
-                # Находим товар и добавляем группы
-                for item in items_to_classify:
-                    if item["_id"] == internal_id:
-                        item["okpd_groups"] = groups
-                        items_for_stage2.append(item)
-                        break
-
-        # Второй этап - определение точного кода
-        if items_for_stage2:
-            classifier_stage2 = StageTwoClassifier(
+        if items_to_classify:
+            # Первый этап - определение топ-5 групп
+            classifier_stage1 = StageOneClassifier(
                 ai_client,
                 mock_store,
-                batch_size=min(15, len(items_for_stage2))
+                batch_size=min(50, len(items_to_classify))
             )
 
-            logger.info(f"Starting stage 2 classification for {len(items_for_stage2)} items...")
-            stage2_result = await classifier_stage2.process_batch(items_for_stage2)
+            logger.info("Starting stage 1 classification...")
+            stage1_result = await classifier_stage1.process_batch(items_to_classify)
 
-            # Обновляем результаты точными кодами
-            for internal_id, result_data in stage2_result["results"].items():
-                original_id = id_mapping[internal_id]
-                if original_id in results:
-                    results[original_id]["okpd2_code"] = result_data["code"]
-                    # Получаем описание кода
-                    code_name = classifier_stage2.prompt_builder.get_code_description(result_data["code"])
-                    results[original_id]["okpd2_name"] = code_name
+            # Подготовка для второго этапа
+            items_for_stage2 = []
+            for internal_id, groups in stage1_result["results"].items():
+                if groups and len(groups) > 0:
+                    # Находим товар и добавляем группы
+                    for item in items_to_classify:
+                        if item["_id"] == internal_id:
+                            item["okpd_groups"] = groups
+                            items_for_stage2.append(item)
+                            break
+                else:
+                    failed_count += 1
+
+            # Второй этап - определение точного кода
+            if items_for_stage2:
+                classifier_stage2 = StageTwoClassifier(
+                    ai_client,
+                    mock_store,
+                    batch_size=min(15, len(items_for_stage2))
+                )
+
+                logger.info(f"Starting stage 2 classification for {len(items_for_stage2)} items...")
+                stage2_result = await classifier_stage2.process_batch(items_for_stage2)
+
+                # Обновляем исходные товары тендера
+                for internal_id, result_data in stage2_result["results"].items():
+                    if internal_id in item_indices:
+                        idx = item_indices[internal_id]
+                        if result_data["code"]:
+                            # Обновляем товар в исходном массиве
+                            tender_data["items"][idx]["okpd2Code"] = result_data["code"]
+                            # Получаем описание кода
+                            code_name = classifier_stage2.prompt_builder.get_code_description(result_data["code"])
+                            if code_name:
+                                tender_data["items"][idx]["okpd2Name"] = code_name
+                            classified_count += 1
+                        else:
+                            failed_count += 1
+                else:
+                    # Товары без точного кода тоже считаем failed
+                    for internal_id in items_for_stage2:
+                        if internal_id not in stage2_result["results"]:
+                            failed_count += 1
 
         # Закрываем AI клиент
         await ai_client.__aexit__(None, None, None)
 
         # Статистика
-        total_classified = sum(1 for r in results.values() if r["okpd_groups"])
-        with_exact_code = sum(1 for r in results.values() if r["okpd2_code"])
+        already_classified = len(items) - len(items_to_classify)
 
         logger.info(
-            f"Classification completed: {total_classified}/{len(positions)} classified, "
-            f"{with_exact_code} with exact codes"
+            f"Tender classification completed: "
+            f"{already_classified} already had codes, "
+            f"{classified_count} newly classified, "
+            f"{failed_count} failed"
         )
 
         return {
-            "results": results,
+            "tender": tender_data,
             "statistics": {
-                "total": len(positions),
-                "classified": total_classified,
-                "with_exact_code": with_exact_code
+                "total": len(items),
+                "already_classified": already_classified,
+                "newly_classified": classified_count,
+                "failed": failed_count
             }
         }
 
     except Exception as e:
-        logger.error(f"Error classifying tender positions: {e}")
+        logger.error(f"Error classifying tender: {e}")
         raise HTTPException(status_code=500, detail=str(e))

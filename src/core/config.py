@@ -76,6 +76,9 @@ class Settings(BaseSettings):
     @property
     def source_mongodb_connection_string(self) -> str:
         """Формирование строки подключения для Source MongoDB"""
+        import logging
+        logger = logging.getLogger(__name__)
+
         # Проверяем, что user и pass не пустые (не None и не пустая строка)
         if self.source_mongo_user and self.source_mongo_pass:
             # URL encode пароля для безопасности
@@ -88,14 +91,22 @@ class Settings(BaseSettings):
                 f"{self.source_mongo_host}:{self.source_mongo_port}"
             )
 
+            # Добавляем базу данных в путь
+            connection_string += f"/{self.source_mongodb_database}"
+
             params = []
             if self.source_mongo_authsource:
                 params.append(f"authSource={self.source_mongo_authsource}")
+            else:
+                # Если не указан authSource, используем исходную БД
+                params.append(f"authSource={self.source_mongodb_database}")
 
             params.append(f"authMechanism={self.source_mongo_authmechanism}")
 
             if params:
-                connection_string += "/?" + "&".join(params)
+                connection_string += "?" + "&".join(params)
+
+            logger.debug(f"Source MongoDB connection params: {params}")
         else:
             connection_string = f"mongodb://{self.source_mongo_host}:{self.source_mongo_port}"
 
@@ -117,8 +128,9 @@ class Settings(BaseSettings):
 
             # Логируем для отладки (маскируем пароль)
             logger.debug(f"Target MongoDB user: {self.target_mongo_user}")
-            logger.debug(f"Target MongoDB password contains + sign: {'+' in self.target_mongo_pass}")
-            logger.debug(f"Encoded password preview: {password[:3]}...{password[-3:] if len(password) > 6 else ''}")
+            logger.debug(
+                f"Target MongoDB password contains special chars: {any(c in self.target_mongo_pass for c in '+@:/?#[]%')}")
+            logger.debug(f"Encoded user length: {len(user)}, password length: {len(password)}")
 
             connection_string = (
                 f"mongodb://{user}:{password}@"
@@ -128,13 +140,21 @@ class Settings(BaseSettings):
             # Добавляем параметры аутентификации
             params = []
 
+            # ВАЖНО: Добавляем базу данных в строку подключения
+            connection_string += f"/{self.target_mongodb_database}"
+
             if self.target_mongo_authsource:
                 params.append(f"authSource={self.target_mongo_authsource}")
+            else:
+                # Если не указан authSource, используем целевую БД
+                params.append(f"authSource={self.target_mongodb_database}")
 
             params.append(f"authMechanism={self.target_mongo_authmechanism}")
 
             if params:
-                connection_string += "/?" + "&".join(params)
+                connection_string += "?" + "&".join(params)
+
+            logger.debug(f"Target MongoDB connection params: {params}")
 
         else:
             # Если нет учетных данных, подключаемся без аутентификации

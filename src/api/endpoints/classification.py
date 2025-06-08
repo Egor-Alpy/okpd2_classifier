@@ -38,11 +38,11 @@ async def get_stage2_statistics(
     """Получить статистику второго этапа"""
     # Считаем товары по статусам второго этапа
     pipeline = [
-        {"$match": {"status_stage1": ProductStatus.CLASSIFIED.value}},
+        {"$match": {"status_stage1": "classified"}},  # Используем существующее имя поля
         {"$facet": {
             "by_status": [
                 {"$group": {
-                    "_id": "$status_stage2",
+                    "_id": "$status_stage2",  # Используем существующее имя поля
                     "count": {"$sum": 1}
                 }}
             ],
@@ -78,15 +78,15 @@ async def get_stage2_statistics(
 
     # Товары без status_stage2 считаются pending
     pending = total - sum(status_counts.values())
-    pending += status_counts.get(ProductStatusStage2.PENDING.value, 0)
+    pending += status_counts.get("pending", 0)
 
     return {
         "total_stage1_classified": total,
         "stage2_pending": pending,
-        "stage2_processing": status_counts.get(ProductStatusStage2.PROCESSING.value, 0),
-        "stage2_classified": status_counts.get(ProductStatusStage2.CLASSIFIED.value, 0),
-        "stage2_none_classified": status_counts.get(ProductStatusStage2.NONE_CLASSIFIED.value, 0),
-        "stage2_failed": status_counts.get(ProductStatusStage2.FAILED.value, 0),
+        "stage2_processing": status_counts.get("processing", 0),
+        "stage2_classified": status_counts.get("classified", 0),
+        "stage2_none_classified": status_counts.get("none_classified", 0),
+        "stage2_failed": status_counts.get("failed", 0),
         "with_exact_code": with_code,
         "completion_percentage": round(with_code / total * 100, 2) if total > 0 else 0
     }
@@ -100,7 +100,7 @@ async def get_stats_by_source_collection(
     """Получить статистику по исходным коллекциям"""
     pipeline = [
         {"$group": {
-            "_id": "$source_collection",
+            "_id": "$source_collection",  # Используем существующее имя поля
             "total": {"$sum": 1},
             "classified": {
                 "$sum": {

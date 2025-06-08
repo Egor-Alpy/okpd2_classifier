@@ -64,6 +64,8 @@ async def root():
         "docs": "/docs",
         "endpoints": {
             "statistics": "/api/v1/stats",
-            "tender_classification": "/api/v1/tender/classify-positions"
+            "statistics_stage2": "/api/v1/stats/stage2",
+            "statistics_by_collection": "/api/v1/stats/by-source-collection",
+            "tender_classification": "/api/v1/tender/classify-tender"
         }
     }

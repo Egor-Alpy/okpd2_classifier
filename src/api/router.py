@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from src.api.endpoints import classification, tender_classification
+from src.api.endpoints import classification, tender_classification, migration
 
 router = APIRouter()
 
@@ -10,9 +10,16 @@ router.include_router(
     tags=["statistics"]
 )
 
-# Классификация позиций тендера
+# Классификация тендеров
 router.include_router(
     tender_classification.router,
     prefix="/tender",
     tags=["tender"]
+)
+
+# Миграция
+router.include_router(
+    migration.router,
+    prefix="/migration",
+    tags=["migration"]
 )
