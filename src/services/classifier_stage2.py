@@ -195,7 +195,7 @@ class StageTwoClassifier:
             products: List[Dict[str, Any]],
             results: Dict[Any, Dict[str, str]]
     ):
-        """Обновить товары с результатами второго этапа - упрощенная схема"""
+        """Обновить товары с результатами второго этапа"""
         updates = []
 
         for product in products:
@@ -212,7 +212,7 @@ class StageTwoClassifier:
                 updates.append({
                     "_id": product_id,
                     "data": {
-                        "status_stg2": "classified",  # Используем упрощенное значение
+                        "status_stage2": "classified",  # FIXED: Using correct field name
                         "okpd2_code": code,
                         "okpd2_name": code_name
                     }
@@ -223,7 +223,7 @@ class StageTwoClassifier:
                 updates.append({
                     "_id": product_id,
                     "data": {
-                        "status_stg2": "none_classified"  # Используем упрощенное значение
+                        "status_stage2": "none_classified"  # FIXED: Using correct field name
                     }
                 })
                 logger.debug(f"Product {product_id} not classified in stage 2")
@@ -239,7 +239,7 @@ class StageTwoClassifier:
             updates.append({
                 "_id": product_id,
                 "data": {
-                    "status_stg2": "failed"  # Используем упрощенное значение
+                    "status_stage2": "failed"  # FIXED: Using correct field name
                 }
             })
 

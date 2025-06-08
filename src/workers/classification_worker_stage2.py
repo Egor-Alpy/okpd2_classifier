@@ -50,17 +50,18 @@ class ClassificationWorkerStage2:
             await self.target_store.initialize()
 
             # Формируем запрос для проверки товаров
+            # FIXED: Using correct field names that match the actual database
             query = {
-                "status_stg1": "classified",
+                "status_stage1": "classified",  # Changed from status_stg1
                 "okpd_groups": {"$exists": True, "$ne": []},
                 "$or": [
-                    {"status_stg2": {"$exists": False}},
-                    {"status_stg2": "pending"}
+                    {"status_stage2": {"$exists": False}},  # Changed from status_stg2
+                    {"status_stage2": "pending"}
                 ]
             }
 
             if self.collection_name:
-                query["collection_name"] = self.collection_name
+                query["source_collection"] = self.collection_name  # Changed from collection_name
                 logger.info(f"Checking products for collection: {self.collection_name}")
 
             # Проверяем наличие товаров для второго этапа
