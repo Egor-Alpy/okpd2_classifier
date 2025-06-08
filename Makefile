@@ -2,7 +2,7 @@
 
 # Переменные по умолчанию
 API_KEY ?= your_secure_api_key_here
-COLLECTION ?=
+COLLECTION ?= officemag
 
 # Цветной вывод
 RED=\033[0;31m

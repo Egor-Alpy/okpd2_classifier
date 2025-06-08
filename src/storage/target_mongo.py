@@ -75,14 +75,14 @@ class TargetMongoStore:
             existing_names = {idx['name'] for idx in existing_indexes}
 
             # Создаем только недостающие индексы
-            # Уникальный составной индекс (используем существующее имя)
+            # Уникальный составной индекс
             if 'source_id_1_source_collection_1' not in existing_names:
                 await self.products.create_index(
                     [("source_id", 1), ("source_collection", 1)],
                     unique=True
                 )
 
-            # Индексы для поиска (используем существующие имена полей)
+            # Индексы для поиска
             if 'status_stage1_1' not in existing_names:
                 await self.products.create_index("status_stage1")
             if 'created_at_1' not in existing_names:
@@ -112,11 +112,11 @@ class TargetMongoStore:
         documents = []
         for product in products:
             doc = {
-                "source_collection": collection_name,  # Используем существующее имя поля
-                "source_id": product["_id"],  # Используем существующее имя поля
-                "title": product["title"],
-                "okpd_groups": None,  # Используем существующее имя поля
-                "status_stage1": "pending",  # Используем существующее имя поля
+                "source_collection": collection_name,
+                "source_id": str(product["_id"]),
+                "title": product.get("title", ""),
+                "okpd_groups": None,
+                "status_stage1": "pending",
                 "created_at": datetime.utcnow()
             }
             documents.append(doc)
@@ -188,7 +188,7 @@ class TargetMongoStore:
         """Атомарно получить и заблокировать товары для классификации с фильтрацией по коллекции"""
         products = []
 
-        # Базовый фильтр (используем существующие имена полей)
+        # Базовый фильтр
         filter_query = {"status_stage1": "pending"}
 
         # Добавляем фильтр по коллекции если указана
@@ -214,7 +214,7 @@ class TargetMongoStore:
         return products
 
     async def bulk_update_products(self, updates: List[Dict[str, Any]]):
-        """Массовое обновление товаров (адаптировано под существующую схему)"""
+        """Массовое обновление товаров"""
         if not updates:
             return
 
@@ -232,22 +232,8 @@ class TargetMongoStore:
                     logger.error(f"Invalid product_id: {product_id}")
                     continue
 
-                # Обновляем с учетом существующей схемы
-                update_data = {}
-                data = update.get("data", {})
-
-                # Мапинг полей: новые имена -> существующие в БД
-                field_mapping = {
-                    "status_stg1": "status_stage1",
-                    "status_stg2": "status_stage2",
-                    "okpd_groups": "okpd_groups",  # Это поле уже правильное
-                    "okpd2_code": "okpd2_code",
-                    "okpd2_name": "okpd2_name"
-                }
-
-                for new_field, db_field in field_mapping.items():
-                    if new_field in data:
-                        update_data[db_field] = data[new_field]
+                # Обновляем данные
+                update_data = update.get("data", {})
 
                 if update_data:
                     operation = UpdateOne(filter_query, {"$set": update_data})
@@ -266,7 +252,7 @@ class TargetMongoStore:
                 raise
 
     async def get_statistics(self) -> Dict[str, int]:
-        """Получить статистику по товарам (используя существующую схему)"""
+        """Получить статистику по товарам"""
         total = await self.products.count_documents({})
 
         # Используем существующие имена полей

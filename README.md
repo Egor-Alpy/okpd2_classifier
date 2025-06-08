@@ -173,7 +173,7 @@ make verify-env
 
 # Файлы должны существовать:
 # - .env
-# - src/data/okpd2_5digit_groups.txt
+# - src/data/okpd2_5digit_groups_optimized.txt
 # - src/data/okpd2_full_tree.json
 ```
 
