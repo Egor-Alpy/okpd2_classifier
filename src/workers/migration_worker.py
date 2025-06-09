@@ -56,6 +56,7 @@ class MigrationWorker:
 
         # Инициализируем target store
         logger.info("Connecting to target MongoDB...")
+        logger.info(f"Using target collection name from settings: {settings.target_collection_name}")
         self.target_store = TargetMongoStore(
             settings.target_mongodb_database,
             settings.target_collection_name

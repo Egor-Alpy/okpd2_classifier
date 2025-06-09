@@ -122,6 +122,13 @@ class Settings(BaseSettings):
     @property
     def target_mongodb_connection_string(self) -> str:
         """Формирование строки подключения для Target MongoDB"""
+        # Добавляем отладочное логирование
+        logger.debug(f"Target MongoDB user: {self.target_mongo_user}")
+        logger.debug(f"Target MongoDB pass exists: {bool(self.target_mongo_pass)}")
+        logger.debug(f"Target MongoDB host: {self.target_mongo_host}")
+        logger.debug(f"Target MongoDB port: {self.target_mongo_port}")
+        logger.debug(f"Target MongoDB authSource: {self.target_mongo_authsource}")
+
         # Переменная для маскирования пароля в логах
         masked_password = None
 

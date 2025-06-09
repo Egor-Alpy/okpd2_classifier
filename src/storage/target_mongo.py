@@ -15,6 +15,12 @@ class TargetMongoStore:
     """Работа с целевой MongoDB (наша новая БД)"""
 
     def __init__(self, database_name: str, collection_name: str = "classified_products"):
+        # Добавляем отладочное логирование
+        logger.debug(f"Initializing TargetMongoStore with database: {database_name}, collection: {collection_name}")
+        logger.debug(f"Settings object: {settings}")
+        logger.debug(f"Target user from settings: {settings.target_mongo_user}")
+        logger.debug(f"Target pass exists: {bool(settings.target_mongo_pass)}")
+
         # Используем connection string из settings
         connection_string = settings.target_mongodb_connection_string
 
