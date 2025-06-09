@@ -76,12 +76,13 @@ class ClassificationWorkerStage2:
 
             logger.info(f"Creating stage 2 classifier with batch_size={batch_size}")
             self.classifier = StageTwoClassifier(
-                ai_client,
-                self.target_store,
-                batch_size,
+                ai_client=ai_client,
+                target_store=self.target_store,
+                batch_size=batch_size,
                 worker_id=self.worker_id
             )
-
+            logger.info(f"234523452345234523452345-0239485-023489"
+                        f"23452345ffffffffffsfsfsfsfsfsf")
             # Проверяем наличие файла с полным деревом ОКПД2
             import os
             if not os.path.exists("src/data/okpd2_full_tree.json"):

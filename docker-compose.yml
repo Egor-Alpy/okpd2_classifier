@@ -109,7 +109,7 @@ volumes:
 #
 # Запуск воркеров для всех коллекций:
 # docker-compose --profile workers up classification-worker-1
-# docker-compose --profile workers-stage2 up classification-worker-stage2-1
+#
 #
 # Запуск воркера для конкретной коллекции (только первый этап):
 # COLLECTION=electronics docker-compose --profile workers-collection up classification-worker-collection
