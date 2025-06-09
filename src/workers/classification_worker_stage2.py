@@ -8,6 +8,8 @@ from src.storage.target_mongo import TargetMongoStore
 from src.services.classifier_stage2 import StageTwoClassifier
 from src.core.config import settings
 
+
+
 # Настройка логирования для воркера
 logging.basicConfig(
     level=logging.INFO,
@@ -80,9 +82,9 @@ class ClassificationWorkerStage2:
                 target_store=self.target_store,
                 batch_size=batch_size,
                 worker_id=self.worker_id
+                # Убрал collection_name - его нет в конструкторе StageTwoClassifier
             )
-            logger.info(f"234523452345234523452345-0239485-023489"
-                        f"23452345ffffffffffsfsfsfsfsfsf")
+
             # Проверяем наличие файла с полным деревом ОКПД2
             import os
             if not os.path.exists("src/data/okpd2_full_tree.json"):
