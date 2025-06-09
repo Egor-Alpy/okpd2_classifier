@@ -15,20 +15,30 @@ class TargetMongoStore:
     """Работа с целевой MongoDB (наша новая БД)"""
 
     def __init__(self, database_name: str, collection_name: str = "classified_products"):
+        # Используем connection string из settings
         connection_string = settings.target_mongodb_connection_string
-        logger.info(f"Connecting to Target MongoDB with: {connection_string}")
 
+        logger.info(f"Connecting to Target MongoDB...")
+        logger.debug(f"Database: {database_name}")
+        logger.debug(f"Collection: {collection_name}")
+
+        # Создаем клиент с дополнительными параметрами
         self.client = AsyncIOMotorClient(
             connection_string,
-            directConnection=settings.target_mongo_direct_connection,
             serverSelectionTimeoutMS=5000,
-            connectTimeoutMS=5000
+            connectTimeoutMS=5000,
+            socketTimeoutMS=5000,
+            maxPoolSize=100,
+            minPoolSize=10,
+            # Важно для записи - настройки write concern
+            w=1,  # Подтверждение записи от primary
+            journal=True  # Запись в журнал
         )
+
         self.db: AsyncIOMotorDatabase = self.client[database_name]
         # Используем настраиваемое имя коллекции
         self.products = self.db[collection_name]
         self.migration_jobs = self.db.migration_jobs
-        logger.info(f"Using collection: {collection_name}")
 
     async def initialize(self):
         """Инициализация хранилища"""
@@ -40,11 +50,33 @@ class TargetMongoStore:
     async def test_connection(self) -> bool:
         """Проверить подключение к БД"""
         try:
+            # Пробуем выполнить команду ping
             await self.client.admin.command('ping')
             logger.info(f"Successfully connected to target MongoDB")
+
+            # Проверяем доступ к базе данных
+            collections = await self.db.list_collection_names()
+            logger.info(f"Successfully accessed database, found {len(collections)} collections")
+
+            # Проверяем права на запись
+            test_doc = {"_id": "test_connection", "timestamp": datetime.utcnow()}
+            await self.db.test_collection.replace_one(
+                {"_id": "test_connection"},
+                test_doc,
+                upsert=True
+            )
+            await self.db.test_collection.delete_one({"_id": "test_connection"})
+            logger.info("Write permissions verified")
+
             return True
         except Exception as e:
             logger.error(f"Failed to connect to target MongoDB: {e}")
+            logger.error("Check your connection parameters:")
+            logger.error(f"- Host: {settings.target_mongo_host}")
+            logger.error(f"- Port: {settings.target_mongo_port}")
+            logger.error(f"- Database: {settings.target_mongodb_database}")
+            logger.error(f"- Auth Source: {settings.target_mongo_authsource}")
+            logger.error(f"- Direct Connection: {settings.target_mongo_direct_connection}")
             return False
 
     async def _setup_indexes(self):
@@ -53,19 +85,32 @@ class TargetMongoStore:
             # Уникальный составной индекс
             await self.products.create_index(
                 [("source_id", 1), ("source_collection", 1)],
-                unique=True
+                unique=True,
+                background=True
             )
 
             # Индексы для поиска
-            await self.products.create_index("status_stage1")
-            await self.products.create_index("status_stage2")
-            await self.products.create_index("created_at")
-            await self.products.create_index("okpd_groups")
-            await self.products.create_index("source_collection")
-            await self.products.create_index("worker_id")
+            await self.products.create_index("status_stage1", background=True)
+            await self.products.create_index("status_stage2", background=True)
+            await self.products.create_index("created_at", background=True)
+            await self.products.create_index("okpd_groups", background=True)
+            await self.products.create_index("source_collection", background=True)
+            await self.products.create_index("worker_id", background=True)
+
+            # Составной индекс для эффективного поиска pending товаров
+            await self.products.create_index(
+                [("status_stage1", 1), ("created_at", 1)],
+                background=True
+            )
+
+            # Составной индекс для второго этапа
+            await self.products.create_index(
+                [("status_stage1", 1), ("status_stage2", 1)],
+                background=True
+            )
 
             # Индекс для migration_jobs
-            await self.migration_jobs.create_index("job_id", unique=True)
+            await self.migration_jobs.create_index("job_id", unique=True, background=True)
 
             logger.info("MongoDB indexes created successfully")
         except Exception as e:
@@ -128,7 +173,8 @@ class TargetMongoStore:
                 {
                     "$set": {
                         "status_stage1": ProductStatus.PROCESSING.value,
-                        "worker_id": worker_id
+                        "worker_id": worker_id,
+                        "processing_started_at": datetime.utcnow()
                     }
                 },
                 return_document=True
@@ -166,7 +212,7 @@ class TargetMongoStore:
                     continue
 
                 # Обновляем поля
-                update_data = {}
+                update_data = {"updated_at": current_time}
                 data = update.get("data", {})
 
                 # Поля первого этапа

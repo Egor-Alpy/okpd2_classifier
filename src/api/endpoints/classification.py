@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from typing import Optional
 import uuid
+import logging
 
 from src.api.dependencies import get_target_store, verify_api_key
 from src.storage.source_mongo import SourceMongoStore
@@ -9,6 +10,7 @@ from src.core.config import settings
 from src.models.domain import ProductStatus
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 @router.post("/migration/start")
@@ -18,15 +20,31 @@ async def start_migration(
 ):
     """Начать миграцию товаров из source в target MongoDB"""
     try:
-        # Создаем source store
+        logger.info("Starting migration via classification endpoint...")
+
+        # Создаем source store с обновленными настройками подключения
         source_store = SourceMongoStore(
             settings.source_mongodb_database,
             settings.source_collection_name
         )
 
         # Проверяем подключение
+        logger.info("Testing source MongoDB connection...")
         if not await source_store.test_connection():
-            raise HTTPException(status_code=500, detail="Cannot connect to source MongoDB")
+            logger.error("Failed to connect to source MongoDB")
+            raise HTTPException(
+                status_code=500,
+                detail="Cannot connect to source MongoDB. Check connection parameters in .env file."
+            )
+
+        # Проверяем наличие товаров
+        if settings.source_collection_name:
+            count = await source_store.count_total_products(settings.source_collection_name)
+            logger.info(f"Found {count} products in collection {settings.source_collection_name}")
+        else:
+            counts = await source_store.count_all_products()
+            total = sum(counts.values())
+            logger.info(f"Found {total} products across {len(counts)} collections")
 
         # Создаем migrator
         migrator = ProductMigrator(
@@ -41,10 +59,13 @@ async def start_migration(
         return {
             "job_id": job_id,
             "status": "started",
-            "message": "Migration started successfully"
+            "message": "Migration started successfully. Run migration worker to process batches."
         }
 
+    except HTTPException:
+        raise
     except Exception as e:
+        logger.error(f"Error in migration endpoint: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -72,7 +93,8 @@ async def get_migration_status(
         "migrated_products": job["migrated_products"],
         "progress_percentage": progress_percentage,
         "last_processed_id": job.get("last_processed_id"),
-        "created_at": job["created_at"]
+        "created_at": job["created_at"],
+        "updated_at": job.get("updated_at")
     }
 
 
@@ -92,11 +114,20 @@ async def resume_migration(
         return {"message": "Migration already completed"}
 
     try:
-        # Создаем source store
+        logger.info(f"Resuming migration job {job_id}")
+
+        # Создаем source store с обновленными настройками
         source_store = SourceMongoStore(
             settings.source_mongodb_database,
             settings.source_collection_name
         )
+
+        # Проверяем подключение
+        if not await source_store.test_connection():
+            raise HTTPException(
+                status_code=500,
+                detail="Cannot connect to source MongoDB"
+            )
 
         # Создаем migrator
         migrator = ProductMigrator(
@@ -114,7 +145,10 @@ async def resume_migration(
             "message": "Migration resumed successfully"
         }
 
+    except HTTPException:
+        raise
     except Exception as e:
+        logger.error(f"Error resuming migration: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 

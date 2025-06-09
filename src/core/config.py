@@ -1,7 +1,10 @@
 from pydantic_settings import BaseSettings
 from pydantic import field_validator
 from typing import Optional
-from urllib.parse import quote
+from urllib.parse import quote_plus
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class Settings(BaseSettings):
@@ -64,108 +67,91 @@ class Settings(BaseSettings):
         """Преобразовать пустые строки в None"""
         if v == '':
             return None
-        # Для паролей логируем наличие специальных символов (для отладки)
-        if isinstance(v, str) and any(c in v for c in ['+', '@', ':', '/', '?', '#', '[', ']', '%']):
-            import logging
-            logger = logging.getLogger(__name__)
-            # Маскируем пароль, показывая только первые и последние символы
-            masked = f"{v[:2]}...{v[-2:]}" if len(v) > 4 else "***"
-            logger.debug(f"Password/value contains special characters: {masked}")
         return v
 
     @property
     def source_mongodb_connection_string(self) -> str:
         """Формирование строки подключения для Source MongoDB"""
-        import logging
-        logger = logging.getLogger(__name__)
-
-        # Проверяем, что user и pass не пустые (не None и не пустая строка)
+        # Базовая часть подключения
         if self.source_mongo_user and self.source_mongo_pass:
-            # URL encode пароля для безопасности
-            # Используем quote() вместо quote_plus() для MongoDB
-            user = quote(self.source_mongo_user, safe='')
-            password = quote(self.source_mongo_pass, safe='')
+            # URL encode для безопасности
+            user = quote_plus(self.source_mongo_user)
+            password = quote_plus(self.source_mongo_pass)
 
             connection_string = (
                 f"mongodb://{user}:{password}@"
                 f"{self.source_mongo_host}:{self.source_mongo_port}"
             )
-
-            # Добавляем базу данных в путь
-            connection_string += f"/{self.source_mongodb_database}"
-
-            params = []
-            if self.source_mongo_authsource:
-                params.append(f"authSource={self.source_mongo_authsource}")
-            else:
-                # Если не указан authSource, используем исходную БД
-                params.append(f"authSource={self.source_mongodb_database}")
-
-            params.append(f"authMechanism={self.source_mongo_authmechanism}")
-
-            if params:
-                connection_string += "?" + "&".join(params)
-
-            logger.debug(f"Source MongoDB connection params: {params}")
         else:
             connection_string = f"mongodb://{self.source_mongo_host}:{self.source_mongo_port}"
+
+        # Параметры подключения
+        params = []
+
+        # authSource - ОБЯЗАТЕЛЬНО для аутентификации
+        if self.source_mongo_authsource:
+            params.append(f"authSource={self.source_mongo_authsource}")
+        elif self.source_mongo_user:  # Если есть пользователь, но не указан authSource
+            # По умолчанию используем admin для аутентификации
+            params.append("authSource=admin")
+
+        # authMechanism
+        if self.source_mongo_authmechanism:
+            params.append(f"authMechanism={self.source_mongo_authmechanism}")
+
+        # directConnection - важно для подключения к конкретному узлу
+        if self.source_mongo_direct_connection:
+            params.append("directConnection=true")
+
+        # Добавляем параметры к строке подключения
+        if params:
+            connection_string += "/?" + "&".join(params)
+
+        logger.debug(
+            f"Source MongoDB connection string: {connection_string.replace(password if 'password' in locals() else '', '***')}")
 
         return connection_string
 
     @property
     def target_mongodb_connection_string(self) -> str:
         """Формирование строки подключения для Target MongoDB"""
-        import logging
-        logger = logging.getLogger(__name__)
-
-        # Проверяем, что user и pass не пустые (не None и не пустая строка)
+        # Базовая часть подключения
         if self.target_mongo_user and self.target_mongo_pass:
-            # URL encode для безопасности (особенно важно для паролей со спецсимволами)
-            # Используем quote() вместо quote_plus() для MongoDB
-            # safe='' означает, что кодируются ВСЕ специальные символы
-            user = quote(self.target_mongo_user, safe='')
-            password = quote(self.target_mongo_pass, safe='')
-
-            # Логируем для отладки (маскируем пароль)
-            logger.debug(f"Target MongoDB user: {self.target_mongo_user}")
-            logger.debug(
-                f"Target MongoDB password contains special chars: {any(c in self.target_mongo_pass for c in '+@:/?#[]%')}")
-            logger.debug(f"Encoded user length: {len(user)}, password length: {len(password)}")
+            # URL encode для безопасности
+            user = quote_plus(self.target_mongo_user)
+            password = quote_plus(self.target_mongo_pass)
 
             connection_string = (
                 f"mongodb://{user}:{password}@"
                 f"{self.target_mongo_host}:{self.target_mongo_port}"
             )
-
-            # Добавляем параметры аутентификации
-            params = []
-
-            # ВАЖНО: Добавляем базу данных в строку подключения
-            connection_string += f"/{self.target_mongodb_database}"
-
-            if self.target_mongo_authsource:
-                params.append(f"authSource={self.target_mongo_authsource}")
-            else:
-                # Если не указан authSource, используем целевую БД
-                params.append(f"authSource={self.target_mongodb_database}")
-
-            params.append(f"authMechanism={self.target_mongo_authmechanism}")
-
-            if params:
-                connection_string += "?" + "&".join(params)
-
-            logger.debug(f"Target MongoDB connection params: {params}")
-
         else:
-            # Если нет учетных данных, подключаемся без аутентификации
             connection_string = f"mongodb://{self.target_mongo_host}:{self.target_mongo_port}"
 
-            # Добавим предупреждение для отладки
-            logger.warning(
-                f"Target MongoDB connection without authentication. "
-                f"User: {'set' if self.target_mongo_user else 'not set'}, "
-                f"Pass: {'set' if self.target_mongo_pass else 'not set'}"
-            )
+        # Параметры подключения
+        params = []
+
+        # authSource - ОБЯЗАТЕЛЬНО для аутентификации
+        if self.target_mongo_authsource:
+            params.append(f"authSource={self.target_mongo_authsource}")
+        elif self.target_mongo_user:  # Если есть пользователь, но не указан authSource
+            # По умолчанию используем admin для аутентификации
+            params.append("authSource=admin")
+
+        # authMechanism
+        if self.target_mongo_authmechanism:
+            params.append(f"authMechanism={self.target_mongo_authmechanism}")
+
+        # directConnection - важно для подключения к конкретному узлу
+        if self.target_mongo_direct_connection:
+            params.append("directConnection=true")
+
+        # Добавляем параметры к строке подключения
+        if params:
+            connection_string += "/?" + "&".join(params)
+
+        logger.debug(
+            f"Target MongoDB connection string: {connection_string.replace(password if 'password' in locals() else '', '***')}")
 
         return connection_string
 

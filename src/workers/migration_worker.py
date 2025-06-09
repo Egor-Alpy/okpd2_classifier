@@ -161,10 +161,17 @@ class MigrationWorker:
                 logger.warning(f"Redis not available: {e}")
                 self.redis_client = None
 
+            # Показываем параметры подключения
+            logger.info("Connection parameters:")
+            logger.info(f"Source host: {settings.source_mongo_host}:{settings.source_mongo_port}")
+            logger.info(f"Source database: {settings.source_mongodb_database}")
+            logger.info(f"Source collection: {settings.source_collection_name or 'ALL'}")
+            logger.info(f"Target host: {settings.target_mongo_host}:{settings.target_mongo_port}")
+            logger.info(f"Target database: {settings.target_mongodb_database}")
+            logger.info(f"Target collection: {settings.target_collection_name}")
+
             # Инициализируем source store без указания коллекции
             logger.info("Connecting to source MongoDB...")
-            logger.info(f"Database: {settings.source_mongodb_database}")
-
             self.source_store = SourceMongoStore(
                 settings.source_mongodb_database,
                 None  # Не указываем коллекцию - будем работать со всеми
@@ -173,6 +180,11 @@ class MigrationWorker:
             # Проверяем подключение к source
             if not await self.source_store.test_connection():
                 logger.error("Failed to connect to source MongoDB!")
+                logger.error("Please check your .env file settings:")
+                logger.error("- SOURCE_MONGO_HOST, SOURCE_MONGO_PORT")
+                logger.error("- SOURCE_MONGO_USER, SOURCE_MONGO_PASS")
+                logger.error("- SOURCE_MONGO_AUTHSOURCE")
+                logger.error("- SOURCE_MONGO_DIRECT_CONNECTION")
                 return
 
             # Получаем список коллекций
@@ -189,14 +201,25 @@ class MigrationWorker:
 
             if total_count == 0:
                 logger.error("No products found in source database!")
+                logger.error("Please check that the source database contains product collections")
                 return
 
             # Инициализируем target store
             logger.info("Connecting to target MongoDB...")
-            logger.info(f"Database: {settings.target_mongodb_database}")
-            logger.info(f"Collection: {settings.target_collection_name}")
+            self.target_store = TargetMongoStore(
+                settings.target_mongodb_database,
+                settings.target_collection_name
+            )
 
-            self.target_store = TargetMongoStore(settings.target_mongodb_database)
+            # Проверяем подключение к target
+            if not await self.target_store.test_connection():
+                logger.error("Failed to connect to target MongoDB!")
+                logger.error("Please check your .env file settings:")
+                logger.error("- TARGET_MONGO_HOST, TARGET_MONGO_PORT")
+                logger.error("- TARGET_MONGO_USER, TARGET_MONGO_PASS")
+                logger.error("- TARGET_MONGO_AUTHSOURCE")
+                logger.error("- TARGET_MONGO_DIRECT_CONNECTION")
+                return
 
             # Инициализируем target store (создание индексов)
             logger.info("Initializing target database and creating indexes...")

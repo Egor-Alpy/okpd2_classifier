@@ -11,12 +11,23 @@ class SourceMongoStore:
     """Работа с исходной MongoDB (только чтение)"""
 
     def __init__(self, database_name: str, collection_name: str = None):
+        # Используем connection string из settings
+        connection_string = settings.source_mongodb_connection_string
+
+        logger.info(f"Connecting to Source MongoDB...")
+        logger.debug(f"Database: {database_name}")
+        logger.debug(f"Collection: {collection_name or 'ALL'}")
+
+        # Создаем клиент с дополнительными параметрами
         self.client = AsyncIOMotorClient(
-            settings.source_mongodb_connection_string,
-            directConnection=settings.source_mongo_direct_connection,
+            connection_string,
             serverSelectionTimeoutMS=5000,
-            connectTimeoutMS=5000
+            connectTimeoutMS=5000,
+            socketTimeoutMS=5000,
+            maxPoolSize=100,
+            minPoolSize=10
         )
+
         self.db: AsyncIOMotorDatabase = self.client[database_name]
         self.collection_name = collection_name
 
@@ -122,11 +133,23 @@ class SourceMongoStore:
     async def test_connection(self) -> bool:
         """Проверить подключение к БД"""
         try:
+            # Пробуем выполнить команду ping
             await self.client.admin.command('ping')
             logger.info("Successfully connected to source MongoDB")
+
+            # Проверяем доступ к базе данных
+            collections = await self.db.list_collection_names()
+            logger.info(f"Successfully accessed database, found {len(collections)} collections")
+
             return True
         except Exception as e:
             logger.error(f"Failed to connect to source MongoDB: {e}")
+            logger.error("Check your connection parameters:")
+            logger.error(f"- Host: {settings.source_mongo_host}")
+            logger.error(f"- Port: {settings.source_mongo_port}")
+            logger.error(f"- Database: {settings.source_mongodb_database}")
+            logger.error(f"- Auth Source: {settings.source_mongo_authsource}")
+            logger.error(f"- Direct Connection: {settings.source_mongo_direct_connection}")
             return False
 
     async def close(self):
