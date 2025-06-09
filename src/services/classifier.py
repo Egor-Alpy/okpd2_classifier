@@ -207,7 +207,6 @@ class StageOneClassifier:
                 )
                 self.last_cache_refresh = current_time
                 logger.info("Cache refreshed successfully")
-                await asyncio.sleep(60)
             except Exception as e:
                 logger.warning(f"Failed to refresh cache: {e}")
 
