@@ -22,6 +22,19 @@ class TargetMongoStore:
         logger.debug(f"Database: {database_name}")
         logger.debug(f"Collection: {collection_name}")
 
+        # Маскируем пароль в логах
+        masked_cs = connection_string
+        if '@' in connection_string:
+            # Находим часть с учетными данными
+            parts = connection_string.split('@')
+            if len(parts) >= 2 and '://' in parts[0]:
+                creds_part = parts[0].split('://')[-1]
+                if ':' in creds_part:
+                    user_part = creds_part.split(':')[0]
+                    masked_cs = connection_string.replace(creds_part, f"{user_part}:***")
+
+        logger.info(f"Connection string: {masked_cs}")
+
         # Создаем клиент с дополнительными параметрами
         self.client = AsyncIOMotorClient(
             connection_string,

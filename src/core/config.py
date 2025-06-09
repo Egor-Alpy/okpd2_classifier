@@ -72,11 +72,15 @@ class Settings(BaseSettings):
     @property
     def source_mongodb_connection_string(self) -> str:
         """Формирование строки подключения для Source MongoDB"""
+        # Переменная для маскирования пароля в логах
+        masked_password = None
+
         # Базовая часть подключения
         if self.source_mongo_user and self.source_mongo_pass:
             # URL encode для безопасности
             user = quote_plus(self.source_mongo_user)
             password = quote_plus(self.source_mongo_pass)
+            masked_password = password  # Сохраняем для маскирования
 
             connection_string = (
                 f"mongodb://{user}:{password}@"
@@ -107,19 +111,26 @@ class Settings(BaseSettings):
         if params:
             connection_string += "/?" + "&".join(params)
 
-        logger.debug(
-            f"Source MongoDB connection string: {connection_string.replace(password if 'password' in locals() else '', '***')}")
+        # Логируем с маскированным паролем
+        if masked_password:
+            logger.debug(f"Source MongoDB connection string: {connection_string.replace(masked_password, '***')}")
+        else:
+            logger.debug(f"Source MongoDB connection string: {connection_string}")
 
         return connection_string
 
     @property
     def target_mongodb_connection_string(self) -> str:
         """Формирование строки подключения для Target MongoDB"""
+        # Переменная для маскирования пароля в логах
+        masked_password = None
+
         # Базовая часть подключения
         if self.target_mongo_user and self.target_mongo_pass:
             # URL encode для безопасности
             user = quote_plus(self.target_mongo_user)
             password = quote_plus(self.target_mongo_pass)
+            masked_password = password  # Сохраняем для маскирования
 
             connection_string = (
                 f"mongodb://{user}:{password}@"
@@ -150,8 +161,11 @@ class Settings(BaseSettings):
         if params:
             connection_string += "/?" + "&".join(params)
 
-        logger.debug(
-            f"Target MongoDB connection string: {connection_string.replace(password if 'password' in locals() else '', '***')}")
+        # Логируем с маскированным паролем
+        if masked_password:
+            logger.debug(f"Target MongoDB connection string: {connection_string.replace(masked_password, '***')}")
+        else:
+            logger.debug(f"Target MongoDB connection string: {connection_string}")
 
         return connection_string
 
