@@ -88,8 +88,18 @@ class TargetMongoStore:
             logger.error(f"- Host: {settings.target_mongo_host}")
             logger.error(f"- Port: {settings.target_mongo_port}")
             logger.error(f"- Database: {settings.target_mongodb_database}")
-            logger.error(f"- Auth Source: {settings.target_mongo_authsource}")
+            logger.error(f"- User: {settings.target_mongo_user or 'Not set'}")
+            logger.error(f"- Auth Source: {settings.target_mongo_authsource or 'Not set'}")
+            logger.error(f"- Auth Mechanism: {settings.target_mongo_authmechanism}")
             logger.error(f"- Direct Connection: {settings.target_mongo_direct_connection}")
+
+            # Дополнительная информация об ошибке аутентификации
+            if "authentication" in str(e).lower() or "unauthorized" in str(e).lower():
+                logger.error("Authentication failed! Please check:")
+                logger.error("1. Username and password are correct")
+                logger.error("2. Auth source database is correct (usually 'admin')")
+                logger.error("3. User has proper permissions on the target database")
+
             return False
 
     async def _setup_indexes(self):
@@ -127,7 +137,13 @@ class TargetMongoStore:
 
             logger.info("MongoDB indexes created successfully")
         except Exception as e:
-            logger.warning(f"Error creating indexes (may already exist): {e}")
+            # Если ошибка аутентификации - это критично
+            if "authentication" in str(e).lower() or "unauthorized" in str(e).lower():
+                logger.error(f"Authentication error when creating indexes: {e}")
+                raise
+            else:
+                # Другие ошибки (например, индексы уже существуют) - это некритично
+                logger.warning(f"Error creating indexes (may already exist): {e}")
 
     async def insert_products_batch(self, products: List[Dict[str, Any]], collection_name: str) -> int:
         """

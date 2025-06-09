@@ -35,6 +35,54 @@ class MigrationWorker:
         self.redis_client = None
         self.running = False
 
+    async def initialize_stores(self):
+        """Инициализировать подключения к БД"""
+        # Инициализируем source store
+        logger.info("Connecting to source MongoDB...")
+        self.source_store = SourceMongoStore(
+            settings.source_mongodb_database,
+            None  # Не указываем коллекцию - будем работать со всеми
+        )
+
+        # Проверяем подключение к source
+        if not await self.source_store.test_connection():
+            logger.error("Failed to connect to source MongoDB!")
+            logger.error("Please check your .env file settings:")
+            logger.error("- SOURCE_MONGO_HOST, SOURCE_MONGO_PORT")
+            logger.error("- SOURCE_MONGO_USER, SOURCE_MONGO_PASS")
+            logger.error("- SOURCE_MONGO_AUTHSOURCE")
+            logger.error("- SOURCE_MONGO_DIRECT_CONNECTION")
+            raise Exception("Cannot connect to source MongoDB")
+
+        # Инициализируем target store
+        logger.info("Connecting to target MongoDB...")
+        self.target_store = TargetMongoStore(
+            settings.target_mongodb_database,
+            settings.target_collection_name
+        )
+
+        # Проверяем подключение к target
+        if not await self.target_store.test_connection():
+            logger.error("Failed to connect to target MongoDB!")
+            logger.error("Please check your .env file settings:")
+            logger.error("- TARGET_MONGO_HOST, TARGET_MONGO_PORT")
+            logger.error("- TARGET_MONGO_USER, TARGET_MONGO_PASS")
+            logger.error("- TARGET_MONGO_AUTHSOURCE")
+            logger.error("- TARGET_MONGO_DIRECT_CONNECTION")
+            raise Exception("Cannot connect to target MongoDB")
+
+        # Инициализируем target store (создание индексов)
+        logger.info("Initializing target database and creating indexes...")
+        await self.target_store.initialize()
+
+        # Создаем migrator
+        logger.info(f"Creating migrator with batch_size={settings.migration_batch_size}")
+        self.migrator = ProductMigrator(
+            self.source_store,
+            self.target_store,
+            settings.migration_batch_size
+        )
+
     async def check_and_start_migration(self):
         """Проверить и начать миграцию если нужно"""
         logger.info("Checking migration status...")
@@ -170,22 +218,8 @@ class MigrationWorker:
             logger.info(f"Target database: {settings.target_mongodb_database}")
             logger.info(f"Target collection: {settings.target_collection_name}")
 
-            # Инициализируем source store без указания коллекции
-            logger.info("Connecting to source MongoDB...")
-            self.source_store = SourceMongoStore(
-                settings.source_mongodb_database,
-                None  # Не указываем коллекцию - будем работать со всеми
-            )
-
-            # Проверяем подключение к source
-            if not await self.source_store.test_connection():
-                logger.error("Failed to connect to source MongoDB!")
-                logger.error("Please check your .env file settings:")
-                logger.error("- SOURCE_MONGO_HOST, SOURCE_MONGO_PORT")
-                logger.error("- SOURCE_MONGO_USER, SOURCE_MONGO_PASS")
-                logger.error("- SOURCE_MONGO_AUTHSOURCE")
-                logger.error("- SOURCE_MONGO_DIRECT_CONNECTION")
-                return
+            # ВАЖНО: Инициализируем stores ДО их использования
+            await self.initialize_stores()
 
             # Получаем список коллекций
             collections = await self.source_store.get_collections_list()
@@ -203,35 +237,6 @@ class MigrationWorker:
                 logger.error("No products found in source database!")
                 logger.error("Please check that the source database contains product collections")
                 return
-
-            # Инициализируем target store
-            logger.info("Connecting to target MongoDB...")
-            self.target_store = TargetMongoStore(
-                settings.target_mongodb_database,
-                settings.target_collection_name
-            )
-
-            # Проверяем подключение к target
-            if not await self.target_store.test_connection():
-                logger.error("Failed to connect to target MongoDB!")
-                logger.error("Please check your .env file settings:")
-                logger.error("- TARGET_MONGO_HOST, TARGET_MONGO_PORT")
-                logger.error("- TARGET_MONGO_USER, TARGET_MONGO_PASS")
-                logger.error("- TARGET_MONGO_AUTHSOURCE")
-                logger.error("- TARGET_MONGO_DIRECT_CONNECTION")
-                return
-
-            # Инициализируем target store (создание индексов)
-            logger.info("Initializing target database and creating indexes...")
-            await self.target_store.initialize()
-
-            # Создаем migrator
-            logger.info(f"Creating migrator with batch_size={settings.migration_batch_size}")
-            self.migrator = ProductMigrator(
-                self.source_store,
-                self.target_store,
-                settings.migration_batch_size
-            )
 
             self.running = True
 
