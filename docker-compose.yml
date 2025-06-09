@@ -78,7 +78,7 @@ services:
     profiles:
       - workers-collection
 
-  # Воркер второго этапа классификации (все коллекции)
+  # Воркер второго этапа классификации
   classification-worker-stage2-1:
     build: .
     env_file:
@@ -96,25 +96,6 @@ services:
     profiles:
       - workers-stage2
 
-  # Воркер второго этапа для конкретной коллекции
-  classification-worker-stage2-collection:
-    build: .
-    env_file:
-      - .env
-    environment:
-      - WORKER_ID=stage2_worker_${COLLECTION:-default}
-      - REDIS_URL=redis://redis:6379
-      - CLASSIFICATION_BATCH_SIZE=15
-      - SOURCE_COLLECTION_NAME=${COLLECTION:-}
-    depends_on:
-      - redis
-    volumes:
-      - ./src/data:/app/src/data:ro
-    restart: unless-stopped
-    command: python -m src.workers.classification_worker_stage2 --worker-id stage2_worker_${COLLECTION:-default} --collection ${COLLECTION:-}
-    profiles:
-      - workers-stage2-collection
-
 volumes:
   redis_data:
 
@@ -130,9 +111,9 @@ volumes:
 # docker-compose --profile workers up classification-worker-1
 # docker-compose --profile workers-stage2 up classification-worker-stage2-1
 #
-# Запуск воркера для конкретной коллекции:
+# Запуск воркера для конкретной коллекции (только первый этап):
 # COLLECTION=electronics docker-compose --profile workers-collection up classification-worker-collection
-# COLLECTION=electronics docker-compose --profile workers-stage2-collection up classification-worker-stage2-collection
 #
 # Масштабирование воркеров:
 # docker-compose --profile workers up --scale classification-worker-1=3
+# docker-compose --profile workers-stage2 up --scale classification-worker-stage2-1=2

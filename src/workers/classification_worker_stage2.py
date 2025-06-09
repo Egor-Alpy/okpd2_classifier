@@ -49,7 +49,7 @@ class ClassificationWorkerStage2:
             # Проверяем наличие товаров для второго этапа
             count = await self.target_store.products.count_documents({
                 "status_stage1": "classified",
-                "okpd_groups": {"$exists": True, "$ne": []},  # ✅ ИСПРАВЛЕНО
+                "okpd_groups": {"$exists": True, "$ne": []},
                 "$or": [
                     {"status_stage2": {"$exists": False}},
                     {"status_stage2": "pending"}
@@ -144,7 +144,7 @@ async def main():
     logger.info(f"Rate Limit Delay: {settings.rate_limit_delay}s")
     logger.info(f"Max Retries: {settings.max_retries}")
     logger.info("=" * 60)
-    logger.info("ВАЖНО: Второй этап теперь обрабатывает все топ-5 групп одновременно!")
+    logger.info("ВАЖНО: Второй этап обрабатывает все товары из первого этапа!")
     logger.info("=" * 60)
 
     try:
